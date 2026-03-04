@@ -1,5 +1,5 @@
 
-import { Team, User, TaskStatus, LLMConfig, Meeting, WeeklyReport, ChatMessage, Project, WorkingGroup, ActionItemStatus, SmartTodo, OneOffQuery } from "../types";
+import { Team, User, TaskStatus, LLMConfig, Meeting, WeeklyReport, ChatMessage, Project, WorkingGroup, ActionItemStatus, SmartTodo, OneOffQuery, PMGanttItem } from "../types";
 
 // --- PROMPTS PAR DÉFAUT ---
 // Chaque prompt correspond à un cas d'usage spécifique (rapports, réunions, etc.)
@@ -1336,6 +1336,190 @@ Required JSON structure:
         };
     } catch (e) {
         console.error("Failed to parse PM report extraction JSON", rawResponse);
+        return defaultResult;
+    }
+};
+
+export const extractPMGanttItemFromText = async (text: string, config: LLMConfig): Promise<{
+    title: string;
+    description: string;
+    owner: string;
+    startDate: string;
+    endDate: string;
+    status: 'Planned' | 'In Progress' | 'Done' | 'Blocked' | '';
+    priority: 'Low' | 'Medium' | 'High' | 'Critical' | '';
+    progressPct: number | null;
+    isMilestone: boolean | null;
+    notes: string;
+}> => {
+    const today = new Date().toISOString().split('T')[0];
+    const prompt = `
+You are a PM Gantt Extraction Assistant. Analyze the text and extract one structured roadmap item.
+
+TEXT TO ANALYZE:
+${text}
+
+CRITICAL RULES:
+1. Extract ONLY explicit information. Do NOT invent or hallucinate.
+2. If unknown, return empty values ("", null).
+3. Dates must be YYYY-MM-DD, otherwise "".
+4. status must be one of: "Planned", "In Progress", "Done", "Blocked" (otherwise "").
+5. priority must be one of: "Low", "Medium", "High", "Critical" (otherwise "").
+6. progressPct must be 0..100 or null.
+7. isMilestone must be true/false if explicit, else null.
+8. Today's date is ${today}; only use it when a relative date is explicitly stated.
+
+RETURN ONLY VALID JSON. NO MARKDOWN.
+
+{
+  "title": "",
+  "description": "",
+  "owner": "",
+  "startDate": "",
+  "endDate": "",
+  "status": "",
+  "priority": "",
+  "progressPct": null,
+  "isMilestone": null,
+  "notes": ""
+}
+`;
+
+    const rawResponse = await runPrompt(prompt, config);
+    const defaultResult = {
+        title: '',
+        description: '',
+        owner: '',
+        startDate: '',
+        endDate: '',
+        status: '' as '' | 'Planned' | 'In Progress' | 'Done' | 'Blocked',
+        priority: '' as '' | 'Low' | 'Medium' | 'High' | 'Critical',
+        progressPct: null as number | null,
+        isMilestone: null as boolean | null,
+        notes: '',
+    };
+
+    const toString = (value: any): string => typeof value === 'string' ? value : '';
+    const toNumberOrNull = (value: any): number | null => {
+        if (value == null) return null;
+        const n = typeof value === 'number' ? value : parseFloat(String(value).replace(',', '.'));
+        return Number.isFinite(n) ? n : null;
+    };
+
+    try {
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        const status = toString(parsed.status);
+        const priority = toString(parsed.priority);
+        const progress = toNumberOrNull(parsed.progressPct);
+        return {
+            title: toString(parsed.title),
+            description: toString(parsed.description),
+            owner: toString(parsed.owner),
+            startDate: toString(parsed.startDate),
+            endDate: toString(parsed.endDate),
+            status: (status === 'Planned' || status === 'In Progress' || status === 'Done' || status === 'Blocked') ? status : '',
+            priority: (priority === 'Low' || priority === 'Medium' || priority === 'High' || priority === 'Critical') ? priority : '',
+            progressPct: progress == null ? null : Math.max(0, Math.min(100, Math.round(progress))),
+            isMilestone: parsed.isMilestone === true ? true : parsed.isMilestone === false ? false : null,
+            notes: toString(parsed.notes),
+        };
+    } catch (e) {
+        console.error("Failed to parse PM Gantt extraction JSON", rawResponse);
+        return defaultResult;
+    }
+};
+
+export const generatePMGanttNarrative = async (
+    projects: Array<{ id: string; name: string; teamName: string; status: string; deadline: string; items: PMGanttItem[] }>,
+    config: LLMConfig
+): Promise<{
+    executiveSummary: string;
+    projectSummaries: { projectId: string; summary: string; keyMilestones: string[] }[];
+}> => {
+    const dataset = projects.map(project => ({
+        projectId: project.id,
+        projectName: project.name,
+        teamName: project.teamName,
+        status: project.status,
+        deadline: project.deadline,
+        items: project.items.map(item => ({
+            title: item.title,
+            owner: item.owner,
+            startDate: item.startDate,
+            endDate: item.endDate,
+            status: item.status,
+            progressPct: item.progressPct,
+            isMilestone: item.isMilestone === true,
+            priority: item.priority,
+            notes: item.notes || '',
+        })),
+    }));
+
+    const prompt = `
+You are a senior PMO consultant producing professional roadmap wording for a Gantt document.
+Use ONLY the provided data. Never invent.
+
+DATA:
+${JSON.stringify(dataset, null, 2)}
+
+TASK:
+1. Write an executive summary (max 4 sentences) covering overall roadmap direction and key timing themes.
+2. For EACH projectId in data, write a concise summary (2-3 sentences) and list up to 4 key milestones (short phrases).
+3. Keep wording professional and board-ready.
+4. If not enough information for a project summary, return "" for summary and [] for milestones.
+
+RETURN ONLY VALID JSON:
+{
+  "executiveSummary": "",
+  "projectSummaries": [
+    {
+      "projectId": "",
+      "summary": "",
+      "keyMilestones": ["", ""]
+    }
+  ]
+}
+`;
+
+    const defaultResult = {
+        executiveSummary: '',
+        projectSummaries: projects.map(project => ({
+            projectId: project.id,
+            summary: '',
+            keyMilestones: [] as string[],
+        })),
+    };
+
+    try {
+        const rawResponse = await runPrompt(prompt, config);
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        const knownIds = new Set(projects.map(p => p.id));
+
+        const projectSummaries = Array.isArray(parsed.projectSummaries)
+            ? parsed.projectSummaries
+                .map((entry: any) => ({
+                    projectId: typeof entry?.projectId === 'string' ? entry.projectId : '',
+                    summary: typeof entry?.summary === 'string' ? entry.summary : '',
+                    keyMilestones: Array.isArray(entry?.keyMilestones)
+                        ? entry.keyMilestones.map((x: any) => String(x)).filter(Boolean).slice(0, 4)
+                        : [] as string[],
+                }))
+                .filter((entry: any) => knownIds.has(entry.projectId))
+            : [];
+
+        const merged = projects.map(project => {
+            const found = projectSummaries.find((entry: any) => entry.projectId === project.id);
+            return found || { projectId: project.id, summary: '', keyMilestones: [] as string[] };
+        });
+
+        return {
+            executiveSummary: typeof parsed.executiveSummary === 'string' ? parsed.executiveSummary : '',
+            projectSummaries: merged,
+        };
+    } catch (e) {
+        console.error("Failed to parse PM Gantt narrative JSON", e);
         return defaultResult;
     }
 };

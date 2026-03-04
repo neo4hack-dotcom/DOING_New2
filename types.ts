@@ -342,10 +342,33 @@ export interface OneOffQuery {
   updatedAt: string;
 }
 
+// --- PM GANT TYPES ---
+export type PMGanttStatus = 'Planned' | 'In Progress' | 'Done' | 'Blocked';
+export type PMGanttPriority = 'Low' | 'Medium' | 'High' | 'Critical';
+
+export interface PMGanttItem {
+  id: string;
+  projectId: string;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+  title: string;
+  description: string;
+  owner: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  progressPct: number; // 0-100
+  status: PMGanttStatus;
+  priority: PMGanttPriority;
+  isMilestone?: boolean;
+  notes?: string;
+}
+
 // --- PM REPORT TYPES ---
 // Data structure for External PM project reports
 
 export type RAGStatus = 'Red' | 'Amber' | 'Green';
+export type PMReportConfidentiality = 'Public' | 'Internal' | 'Confidential' | 'Strictly Confidential';
 
 export interface PMReportIncident {
   id: string;
@@ -391,6 +414,14 @@ export interface PMReportRisk {
   owner: string;
 }
 
+export interface PMReportCostSplit {
+  id: string;
+  teamId: string;
+  allocatedMD?: number;
+  spentMD?: number;
+  forecastMD?: number;
+}
+
 export interface PMReportData {
   id: string;
   projectId: string;
@@ -420,6 +451,8 @@ export interface PMReportData {
   budgetAllocated?: number;
   budgetSpent?: number;
   budgetForecast?: number;
+  costDistribution?: PMReportCostSplit[]; // Manual split across teams
+  confidentialityLevel?: PMReportConfidentiality; // PM-selected confidentiality level
   // Completion
   overallCompletionPct: number;
 }
@@ -442,6 +475,7 @@ export interface AppState {
   workingGroups: WorkingGroup[]; // Groupes de travail avec sessions
   smartTodos: SmartTodo[]; // Tâches personnelles intelligentes
   oneOffQueries: OneOffQuery[]; // Demandes ponctuelles (One off queries)
+  pmGantData: PMGanttItem[]; // PM Gant roadmap items
   pmReportData: PMReportData[]; // PM Report data entries
   notifications: AppNotification[]; // Notifications système
   dismissedAlerts: { [key: string]: string }; // Alertes rejetées (clé -> date ISO), stocké localement par utilisateur
