@@ -50,6 +50,15 @@ interface ProjectCardRIDItem {
   mitigation: string;
 }
 
+interface ProjectCardTeamBudgetSplit {
+  id: string;
+  teamName: string; // Free label entered manually by PM, not necessarily a DOINg team
+  totalBudgetMD: number | null;
+  actualSpendMD: number | null;
+  varianceMD: number | null;
+  etcMD: number | null;
+}
+
 interface ProjectCardDraft {
   cardTitle: string;
   commonLink: string;
@@ -64,6 +73,7 @@ interface ProjectCardDraft {
   actualSpendMD: number | null;
   varianceMD: number | null;
   etcMD: number | null;
+  teamBudgetSplits: ProjectCardTeamBudgetSplit[];
   ridItems: ProjectCardRIDItem[];
   keyDecisions: string[];
   approvalsNeeded: string[];
@@ -156,6 +166,7 @@ const createEmptyDraft = (): ProjectCardDraft => ({
   actualSpendMD: null,
   varianceMD: null,
   etcMD: null,
+  teamBudgetSplits: [],
   ridItems: [],
   keyDecisions: [],
   approvalsNeeded: [],
@@ -199,6 +210,28 @@ const normalizeFinancials = (draft: ProjectCardDraft): ProjectCardDraft => {
   } else if (normalized.etcMD != null) {
     normalized.etcMD = round2(normalized.etcMD);
   }
+
+  normalized.teamBudgetSplits = (normalized.teamBudgetSplits || [])
+    .map(split => {
+      const next: ProjectCardTeamBudgetSplit = {
+        id: split.id,
+        teamName: (split.teamName || '').trim(),
+        totalBudgetMD: split.totalBudgetMD == null ? null : round2(split.totalBudgetMD),
+        actualSpendMD: split.actualSpendMD == null ? null : round2(split.actualSpendMD),
+        varianceMD: split.varianceMD == null ? null : round2(split.varianceMD),
+        etcMD: split.etcMD == null ? null : round2(split.etcMD),
+      };
+
+      if (next.varianceMD == null && next.totalBudgetMD != null && next.actualSpendMD != null) {
+        next.varianceMD = round2(next.totalBudgetMD - next.actualSpendMD);
+      }
+      if (next.etcMD == null && next.totalBudgetMD != null && next.actualSpendMD != null) {
+        next.etcMD = round2(Math.max(0, next.totalBudgetMD - next.actualSpendMD));
+      }
+
+      return next;
+    })
+    .filter(split => split.teamName.length > 0);
 
   return normalized;
 };
@@ -431,6 +464,37 @@ const buildDeterministicDraft = (
     ? `${projects[0].name} - Project Card`
     : `DOINg - SteerCo Project Card (${projectCount} Projects)`;
 
+  const splitMap = new Map<string, { teamName: string; total: number; spent: number; forecast: number }>();
+  reports.forEach(report => {
+    (report.costDistribution || []).forEach(split => {
+      const teamName = (split.teamName || split.teamId || '').trim();
+      if (!teamName) return;
+      const entry = splitMap.get(teamName.toLowerCase()) || { teamName, total: 0, spent: 0, forecast: 0 };
+      entry.total += split.allocatedMD || 0;
+      entry.spent += split.spentMD || 0;
+      entry.forecast += split.forecastMD || 0;
+      splitMap.set(teamName.toLowerCase(), entry);
+    });
+  });
+
+  const teamBudgetSplits: ProjectCardTeamBudgetSplit[] = Array.from(splitMap.values())
+    .sort((a, b) => a.teamName.localeCompare(b.teamName))
+    .map(entry => {
+      const variance = entry.total - entry.spent;
+      const etc = entry.forecast > 0
+        ? Math.max(0, entry.forecast - entry.spent)
+        : Math.max(0, entry.total - entry.spent);
+
+      return {
+        id: generateId(),
+        teamName: entry.teamName,
+        totalBudgetMD: round2(entry.total),
+        actualSpendMD: round2(entry.spent),
+        varianceMD: round2(variance),
+        etcMD: round2(etc),
+      };
+    });
+
   const draft: ProjectCardDraft = {
     cardTitle: defaultTitle,
     commonLink: currentCommonLink || '',
@@ -445,6 +509,7 @@ const buildDeterministicDraft = (
     actualSpendMD: actualSpendMD == null ? null : round2(actualSpendMD),
     varianceMD: varianceMD == null ? null : round2(varianceMD),
     etcMD: etcMD == null ? null : round2(etcMD),
+    teamBudgetSplits,
     ridItems,
     keyDecisions,
     approvalsNeeded,
@@ -507,8 +572,9 @@ const buildProjectCardHTML = (
   const ridItems = draft.ridItems.length > 0
     ? draft.ridItems
     : [{ id: generateId(), risk: '', issue: 'No explicit risk/issue/dependency captured.', dependency: '', mitigation: '' }];
+  const teamBudgetSplits = draft.teamBudgetSplits.length > 0 ? draft.teamBudgetSplits : [];
 
-  const denseMode = achievements.length + milestones.length + ridItems.length + draft.keyDecisions.length + draft.approvalsNeeded.length + draft.resourceRequests.length + draft.escalations.length > 20;
+  const denseMode = achievements.length + milestones.length + ridItems.length + teamBudgetSplits.length + draft.keyDecisions.length + draft.approvalsNeeded.length + draft.resourceRequests.length + draft.escalations.length > 20;
 
   const healthClass = draft.overallHealth === 'Green'
     ? 'health-green'
@@ -554,6 +620,8 @@ const buildProjectCardHTML = (
     .kpi{border:1px solid #dbe5ef;border-radius:10px;padding:8px;background:#f8fafc}
     .kpi .label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#64748b;font-weight:700}
     .kpi .value{font-size:14px;color:#0f172a;font-weight:800;margin-top:3px}
+    .split-title{margin-top:12px;font-size:11px;font-weight:800;color:#0f172a}
+    .split-note{margin-top:4px;font-size:10px;color:#64748b}
     .ask-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
     .ask{border:1px solid #dbe5ef;border-radius:10px;padding:8px;background:#fff}
     .ask h3{margin:0 0 6px 0;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#334155}
@@ -595,6 +663,16 @@ const buildProjectCardHTML = (
       <td>${escapeHTML(item.issue || '—')}</td>
       <td>${escapeHTML(item.dependency || '—')}</td>
       <td>${escapeHTML(item.mitigation || '—')}</td>
+    </tr>
+  `).join('');
+
+  const teamBudgetRows = teamBudgetSplits.map(split => `
+    <tr>
+      <td>${escapeHTML(split.teamName)}</td>
+      <td>${escapeHTML(formatMD(split.totalBudgetMD))}</td>
+      <td>${escapeHTML(formatMD(split.actualSpendMD))}</td>
+      <td>${escapeHTML(formatMD(split.varianceMD))}</td>
+      <td>${escapeHTML(formatMD(split.etcMD))}</td>
     </tr>
   `).join('');
 
@@ -648,6 +726,22 @@ const buildProjectCardHTML = (
           <div class="kpi"><div class="label">Variance</div><div class="value">${escapeHTML(formatMD(draft.varianceMD))}</div></div>
           <div class="kpi"><div class="label">ETC</div><div class="value">${escapeHTML(formatMD(draft.etcMD))}</div></div>
         </div>
+        ${teamBudgetSplits.length > 0 ? `
+          <div class="split-title">Manual Team Cost Distribution</div>
+          <div class="split-note">Team labels are free text and may differ from DOINg team entities.</div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Team Name</th>
+                <th>Budget (MD)</th>
+                <th>Spent (MD)</th>
+                <th>Variance (MD)</th>
+                <th>ETC (MD)</th>
+              </tr>
+            </thead>
+            <tbody>${teamBudgetRows}</tbody>
+          </table>
+        ` : ''}
       </section>
     </div>
 
@@ -1067,6 +1161,76 @@ ${generatedHTML}
     setDraft(prev => ({ ...prev, [field]: splitLines(value) }));
   };
 
+  const updateTeamBudgetSplitName = (splitId: string, teamName: string) => {
+    setDraft(prev => ({
+      ...prev,
+      teamBudgetSplits: prev.teamBudgetSplits.map(split =>
+        split.id === splitId ? { ...split, teamName } : split
+      )
+    }));
+  };
+
+  const updateTeamBudgetSplitNumber = (
+    splitId: string,
+    field: 'totalBudgetMD' | 'actualSpendMD' | 'varianceMD' | 'etcMD',
+    value: string
+  ) => {
+    const cleaned = value.trim();
+    const parsed = cleaned ? parseFloat(cleaned.replace(',', '.')) : null;
+    setDraft(prev => ({
+      ...prev,
+      teamBudgetSplits: prev.teamBudgetSplits.map(split =>
+        split.id === splitId
+          ? { ...split, [field]: parsed != null && Number.isFinite(parsed) ? parsed : null }
+          : split
+      )
+    }));
+  };
+
+  const addTeamBudgetSplit = () => {
+    setDraft(prev => ({
+      ...prev,
+      teamBudgetSplits: [
+        ...prev.teamBudgetSplits,
+        {
+          id: generateId(),
+          teamName: '',
+          totalBudgetMD: null,
+          actualSpendMD: null,
+          varianceMD: null,
+          etcMD: null,
+        }
+      ]
+    }));
+  };
+
+  const removeTeamBudgetSplit = (splitId: string) => {
+    setDraft(prev => ({
+      ...prev,
+      teamBudgetSplits: prev.teamBudgetSplits.filter(split => split.id !== splitId)
+    }));
+  };
+
+  const splitTotals = useMemo(() => {
+    return draft.teamBudgetSplits.reduce(
+      (acc, split) => ({
+        total: acc.total + (split.totalBudgetMD || 0),
+        spent: acc.spent + (split.actualSpendMD || 0),
+        variance: acc.variance + (split.varianceMD || 0),
+        etc: acc.etc + (split.etcMD || 0),
+      }),
+      { total: 0, spent: 0, variance: 0, etc: 0 }
+    );
+  }, [draft.teamBudgetSplits]);
+
+  const hasSplitDelta =
+    draft.teamBudgetSplits.length > 0 && (
+      Math.abs(splitTotals.total - (draft.totalBudgetMD || 0)) > 0.1 ||
+      Math.abs(splitTotals.spent - (draft.actualSpendMD || 0)) > 0.1 ||
+      Math.abs(splitTotals.variance - (draft.varianceMD || 0)) > 0.1 ||
+      Math.abs(splitTotals.etc - (draft.etcMD || 0)) > 0.1
+    );
+
   if (view === 'preview') {
     return (
       <div className="max-w-7xl mx-auto">
@@ -1418,6 +1582,88 @@ ${generatedHTML}
                 <label className={labelClass}>ETC</label>
                 <input type="number" className={inputClass} value={draft.etcMD ?? ''} onChange={e => updateNumberField('etcMD', e.target.value)} />
               </div>
+            </div>
+
+            <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h5 className="text-xs font-bold text-gray-900 dark:text-white">Manual Team Cost Distribution</h5>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">Team names are free text and do not need to match DOINg teams.</p>
+                </div>
+                <button
+                  onClick={addTeamBudgetSplit}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-md hover:bg-indigo-100 dark:hover:bg-indigo-900/40"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Team Split
+                </button>
+              </div>
+
+              {draft.teamBudgetSplits.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+                  No team split yet. Add rows to distribute budget/spend manually across teams.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {draft.teamBudgetSplits.map(split => (
+                    <div key={split.id} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40">
+                      <input
+                        className={`${inputClass} md:col-span-3`}
+                        placeholder="Team name (free text)"
+                        value={split.teamName}
+                        onChange={e => updateTeamBudgetSplitName(split.id, e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        className={`${inputClass} md:col-span-2`}
+                        placeholder="Budget MD"
+                        value={split.totalBudgetMD ?? ''}
+                        onChange={e => updateTeamBudgetSplitNumber(split.id, 'totalBudgetMD', e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        className={`${inputClass} md:col-span-2`}
+                        placeholder="Spent MD"
+                        value={split.actualSpendMD ?? ''}
+                        onChange={e => updateTeamBudgetSplitNumber(split.id, 'actualSpendMD', e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        className={`${inputClass} md:col-span-2`}
+                        placeholder="Variance MD"
+                        value={split.varianceMD ?? ''}
+                        onChange={e => updateTeamBudgetSplitNumber(split.id, 'varianceMD', e.target.value)}
+                      />
+                      <input
+                        type="number"
+                        className={`${inputClass} md:col-span-2`}
+                        placeholder="ETC MD"
+                        value={split.etcMD ?? ''}
+                        onChange={e => updateTeamBudgetSplitNumber(split.id, 'etcMD', e.target.value)}
+                      />
+                      <button
+                        onClick={() => removeTeamBudgetSplit(split.id)}
+                        className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 md:col-span-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Budget:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.total)}</span></div>
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Spent:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.spent)}</span></div>
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Variance:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.variance)}</span></div>
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split ETC:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.etc)}</span></div>
+                    </div>
+                    {hasSplitDelta && (
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md px-2 py-1.5">
+                        Split totals differ from global Financials fields (Budget / Spent / Variance / ETC). Adjust manually if you want full alignment.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

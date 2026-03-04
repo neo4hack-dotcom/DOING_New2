@@ -8,7 +8,7 @@ import {
   Bot, Paperclip, Loader2, X, Send, Mail
 } from 'lucide-react';
 import {
-  Team, User, Project, LLMConfig, PMReportData, PMReportCostSplit, PMReportConfidentiality,
+  Team, User, Project, Task, TaskStatus, TaskPriority, LLMConfig, PMReportData, PMReportCostSplit, PMReportConfidentiality,
   RAGStatus
 } from '../types';
 import { generateId } from '../services/storage';
@@ -112,82 +112,378 @@ const getIncidentRAGStatus = (report: PMReportData): RAGStatus => {
   return 'Green';
 };
 
-const mergeExtractedDataIntoReport = (report: PMReportData, extracted: PMReportExtractionDraft): PMReportData => {
+interface MergeExtractedOptions {
+  preserveExisting?: boolean;
+}
+
+const isMissingText = (value?: string | null): boolean => !value || !value.trim();
+const isMissingNumeric = (value?: number | null): boolean => value == null || !Number.isFinite(value) || value === 0;
+const normalizeKeyPart = (value: string | undefined | null) => (value || '').trim().toLowerCase();
+
+const mergeUniqueByKey = <T,>(
+  existing: T[],
+  incoming: T[],
+  keyFn: (item: T) => string
+): T[] => {
+  const merged = [...existing];
+  const seen = new Set(existing.map(item => keyFn(item)).filter(Boolean));
+
+  incoming.forEach(item => {
+    const key = keyFn(item);
+    if (!key || !seen.has(key)) {
+      merged.push(item);
+      if (key) seen.add(key);
+    }
+  });
+
+  return merged;
+};
+
+const taskPriorityRank = (priority: TaskPriority) => {
+  if (priority === TaskPriority.URGENT) return 4;
+  if (priority === TaskPriority.HIGH) return 3;
+  if (priority === TaskPriority.MEDIUM) return 2;
+  return 1;
+};
+
+const buildProjectTaskPrefillDraft = (
+  project: Project,
+  usersById: Record<string, User>
+): PMReportExtractionDraft => {
+  const today = new Date().toISOString().split('T')[0];
+  const tasks = project.tasks || [];
+  const totalTasks = tasks.length;
+  const doneTasks = tasks.filter(task => task.status === TaskStatus.DONE);
+  const blockedTasks = tasks.filter(task => task.status === TaskStatus.BLOCKED);
+  const overdueTasks = tasks.filter(task =>
+    task.status !== TaskStatus.DONE &&
+    Boolean(task.eta) &&
+    task.eta < today
+  );
+  const unassignedTasks = tasks.filter(task => !task.assigneeId);
+  const completionPct = totalTasks > 0
+    ? Math.round((doneTasks.length / totalTasks) * 100)
+    : (project.status === 'Done' ? 100 : 0);
+
+  const hasCriticalBlocked = blockedTasks.some(task =>
+    task.priority === TaskPriority.URGENT || task.priority === TaskPriority.HIGH
+  );
+  const hasRedExternalDependency = (project.externalDependencies || []).some(dep => dep.status === 'Red');
+
+  let overallStatus: PMReportExtractionDraft['overallStatus'] = 'Green';
+  if (project.status === 'Paused' || blockedTasks.length > 0 || overdueTasks.length > 0) overallStatus = 'Amber';
+  if (hasCriticalBlocked || hasRedExternalDependency || overdueTasks.length >= 3) overallStatus = 'Red';
+
+  let scopeStatus: PMReportExtractionDraft['scopeStatus'] = 'Green';
+  if (blockedTasks.length > 0 || hasRedExternalDependency) scopeStatus = 'Amber';
+  if (hasCriticalBlocked || hasRedExternalDependency) scopeStatus = 'Red';
+
+  let scheduleStatus: PMReportExtractionDraft['scheduleStatus'] = 'Green';
+  if (project.status === 'Paused' || overdueTasks.length > 0) scheduleStatus = 'Amber';
+  if (overdueTasks.length >= 3) scheduleStatus = 'Red';
+
+  const hasAnyTaskCost = tasks.some(task => typeof task.cost === 'number' && Number.isFinite(task.cost));
+  const totalTaskCost = tasks.reduce((sum, task) => sum + (typeof task.cost === 'number' ? task.cost : 0), 0);
+  const doneTaskCost = doneTasks.reduce((sum, task) => sum + (typeof task.cost === 'number' ? task.cost : 0), 0);
+  const budgetAllocated = typeof project.cost === 'number' && Number.isFinite(project.cost)
+    ? project.cost
+    : (hasAnyTaskCost ? totalTaskCost : null);
+  const budgetSpent = hasAnyTaskCost ? doneTaskCost : null;
+  const budgetForecast = hasAnyTaskCost
+    ? Math.max(totalTaskCost, budgetAllocated || 0)
+    : (budgetAllocated != null ? budgetAllocated : null);
+
+  let budgetStatus: PMReportExtractionDraft['budgetStatus'] = '';
+  if (budgetAllocated != null && budgetAllocated > 0 && budgetForecast != null) {
+    if (budgetForecast > budgetAllocated * 1.1) budgetStatus = 'Red';
+    else if (budgetForecast > budgetAllocated * 0.95) budgetStatus = 'Amber';
+    else budgetStatus = 'Green';
+  }
+
+  let resourceStatus: PMReportExtractionDraft['resourceStatus'] = 'Green';
+  if (unassignedTasks.length > 0) resourceStatus = 'Amber';
+  if (unassignedTasks.length >= 3 || (totalTasks > 0 && (unassignedTasks.length / totalTasks) >= 0.5)) resourceStatus = 'Red';
+
+  const summaryBits = [
+    `"${project.name}" is currently ${project.status.toLowerCase()}.`,
+    totalTasks > 0
+      ? `${completionPct}% completion (${doneTasks.length}/${totalTasks} tasks done${blockedTasks.length > 0 ? `, ${blockedTasks.length} blocked` : ''}${overdueTasks.length > 0 ? `, ${overdueTasks.length} overdue` : ''}).`
+      : 'No project tasks are available yet.',
+    project.description ? project.description.trim() : ''
+  ].filter(Boolean);
+
+  const keyDecisionBits: string[] = [];
+  if (typeof project.tsdCreated === 'boolean') {
+    keyDecisionBits.push(`TSD created: ${project.tsdCreated ? 'Yes' : 'No'}.`);
+  }
+  if ((project.dependencies || []).length > 0) {
+    keyDecisionBits.push(`Cross-project dependencies to monitor: ${(project.dependencies || []).length}.`);
+  }
+  const redDeps = (project.externalDependencies || []).filter(dep => dep.status === 'Red').length;
+  if (redDeps > 0) {
+    keyDecisionBits.push(`External dependencies with RED status: ${redDeps}.`);
+  }
+
+  const nextStepTasks = tasks
+    .filter(task => task.status !== TaskStatus.DONE)
+    .sort((a, b) => {
+      const prioCmp = taskPriorityRank(b.priority) - taskPriorityRank(a.priority);
+      if (prioCmp !== 0) return prioCmp;
+      const aEta = a.eta || '9999-12-31';
+      const bEta = b.eta || '9999-12-31';
+      return aEta.localeCompare(bEta);
+    })
+    .slice(0, 5);
+
+  const updates = tasks
+    .filter(task => task.status !== TaskStatus.TODO)
+    .sort((a, b) => {
+      const aEta = a.eta || '9999-12-31';
+      const bEta = b.eta || '9999-12-31';
+      return aEta.localeCompare(bEta);
+    })
+    .slice(0, 8)
+    .map(task => {
+      const isBlocked = task.status === TaskStatus.BLOCKED;
+      const isDone = task.status === TaskStatus.DONE;
+      const isOverdue = task.status !== TaskStatus.DONE && task.eta && task.eta < today;
+      return {
+        date: task.eta || today,
+        category: isBlocked || isOverdue ? 'Timeline' : isDone ? 'Scope' : 'Other',
+        title: task.title || '',
+        description: task.description || '',
+        impact: isBlocked || isOverdue ? 'Amber' : 'Green',
+      };
+    });
+
+  const news = doneTasks
+    .slice(0, 6)
+    .map(task => ({
+      date: task.eta || today,
+      title: task.title || '',
+      description: task.description || '',
+      type: 'Achievement' as const,
+    }));
+
+  const milestones = tasks
+    .filter(task => Boolean(task.eta))
+    .sort((a, b) => (a.eta || '').localeCompare(b.eta || ''))
+    .slice(0, 10)
+    .map(task => ({
+      name: task.title || '',
+      plannedDate: task.eta || '',
+      revisedDate: '',
+      status: task.status === TaskStatus.BLOCKED
+        ? 'Red'
+        : task.status === TaskStatus.ONGOING
+          ? 'Amber'
+          : 'Green',
+      completionPct: task.status === TaskStatus.DONE
+        ? 100
+        : task.status === TaskStatus.ONGOING
+          ? 50
+          : task.status === TaskStatus.BLOCKED
+            ? 25
+            : 0
+    }));
+
+  const getTaskOwner = (task: Task) => {
+    const user = usersById[task.assigneeId || ''];
+    return user ? `${user.firstName} ${user.lastName}`.trim() : '';
+  };
+
+  const riskFromTasks = blockedTasks.slice(0, 8).map(task => ({
+    description: task.title || 'Blocked task',
+    likelihood: task.priority === TaskPriority.URGENT ? 'High' : 'Medium',
+    impact: task.priority === TaskPriority.URGENT || task.priority === TaskPriority.HIGH ? 'High' : 'Medium',
+    mitigation: task.description || 'Follow-up with owner and unblock dependencies.',
+    owner: getTaskOwner(task)
+  }));
+  const riskFromExternalDeps = (project.externalDependencies || [])
+    .filter(dep => dep.status !== 'Green')
+    .slice(0, 5)
+    .map(dep => ({
+      description: `External dependency: ${dep.label}`,
+      likelihood: dep.status === 'Red' ? 'High' as const : 'Medium' as const,
+      impact: dep.status === 'Red' ? 'High' as const : 'Medium' as const,
+      mitigation: 'Align owners and update dependency plan.',
+      owner: '',
+    }));
+
+  return {
+    overallStatus,
+    scopeStatus,
+    scheduleStatus,
+    budgetStatus,
+    resourceStatus,
+    overallCompletionPct: completionPct,
+    executiveSummary: summaryBits.join(' '),
+    keyDecisions: keyDecisionBits.join(' '),
+    nextSteps: nextStepTasks.map(task => {
+      const etaSuffix = task.eta ? ` (ETA ${task.eta})` : '';
+      return `${task.title}${etaSuffix}`;
+    }).join('\n'),
+    budgetAllocated,
+    budgetSpent,
+    budgetForecast,
+    incidents: blockedTasks.slice(0, 8).map(task => ({
+      date: task.eta || today,
+      title: task.title || '',
+      description: task.description || '',
+      severity: task.priority === TaskPriority.URGENT ? 'Critical' : 'Major',
+      status: 'Open',
+    })),
+    updates,
+    news,
+    milestones,
+    risks: [...riskFromTasks, ...riskFromExternalDeps],
+  };
+};
+
+const mergeExtractedDataIntoReport = (
+  report: PMReportData,
+  extracted: PMReportExtractionDraft,
+  options: MergeExtractedOptions = {}
+): PMReportData => {
+  const { preserveExisting = false } = options;
   const isRAG = (value: string): value is RAGStatus => value === 'Green' || value === 'Amber' || value === 'Red';
   const clampPct = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
   const next: PMReportData = { ...report };
+  const looksUntouched =
+    isMissingText(report.executiveSummary) &&
+    isMissingText(report.keyDecisions) &&
+    isMissingText(report.nextSteps) &&
+    report.incidents.length === 0 &&
+    report.updates.length === 0 &&
+    report.news.length === 0 &&
+    report.milestones.length === 0 &&
+    report.risks.length === 0 &&
+    (report.overallCompletionPct || 0) === 0 &&
+    (report.budgetAllocated || 0) === 0 &&
+    (report.budgetSpent || 0) === 0 &&
+    (report.budgetForecast || 0) === 0;
 
-  if (isRAG(extracted.overallStatus)) next.overallStatus = extracted.overallStatus;
-  if (isRAG(extracted.scopeStatus)) next.scopeStatus = extracted.scopeStatus;
-  if (isRAG(extracted.scheduleStatus)) next.scheduleStatus = extracted.scheduleStatus;
-  if (isRAG(extracted.budgetStatus)) next.budgetStatus = extracted.budgetStatus;
-  if (isRAG(extracted.resourceStatus)) next.resourceStatus = extracted.resourceStatus;
+  const canUpdateRAG = () => !preserveExisting || looksUntouched;
+  const shouldSetText = (value: string) => !preserveExisting || isMissingText(value);
+  const shouldSetNumber = (value?: number | null) => !preserveExisting || isMissingNumeric(value);
 
-  if (extracted.overallCompletionPct != null) next.overallCompletionPct = clampPct(extracted.overallCompletionPct);
+  if (canUpdateRAG() && isRAG(extracted.overallStatus)) next.overallStatus = extracted.overallStatus;
+  if (canUpdateRAG() && isRAG(extracted.scopeStatus)) next.scopeStatus = extracted.scopeStatus;
+  if (canUpdateRAG() && isRAG(extracted.scheduleStatus)) next.scheduleStatus = extracted.scheduleStatus;
+  if (canUpdateRAG() && isRAG(extracted.budgetStatus)) next.budgetStatus = extracted.budgetStatus;
+  if (canUpdateRAG() && isRAG(extracted.resourceStatus)) next.resourceStatus = extracted.resourceStatus;
 
-  if (extracted.executiveSummary.trim()) next.executiveSummary = extracted.executiveSummary.trim();
-  if (extracted.keyDecisions.trim()) next.keyDecisions = extracted.keyDecisions.trim();
-  if (extracted.nextSteps.trim()) next.nextSteps = extracted.nextSteps.trim();
-
-  if (extracted.budgetAllocated != null) next.budgetAllocated = extracted.budgetAllocated;
-  if (extracted.budgetSpent != null) next.budgetSpent = extracted.budgetSpent;
-  if (extracted.budgetForecast != null) next.budgetForecast = extracted.budgetForecast;
-
-  if (extracted.incidents.length > 0) {
-    next.incidents = extracted.incidents.map(inc => ({
-      id: generateId(),
-      date: inc.date || '',
-      title: inc.title || '',
-      description: inc.description || '',
-      severity: inc.severity || 'Minor',
-      status: inc.status || 'Open',
-    }));
+  if (extracted.overallCompletionPct != null && shouldSetNumber(next.overallCompletionPct)) {
+    next.overallCompletionPct = clampPct(extracted.overallCompletionPct);
   }
 
-  if (extracted.updates.length > 0) {
-    next.updates = extracted.updates.map(upd => ({
-      id: generateId(),
-      date: upd.date || '',
-      category: upd.category || 'Other',
-      title: upd.title || '',
-      description: upd.description || '',
-      impact: isRAG(upd.impact) ? upd.impact : 'Green',
-    }));
+  if (extracted.executiveSummary.trim() && shouldSetText(next.executiveSummary)) next.executiveSummary = extracted.executiveSummary.trim();
+  if (extracted.keyDecisions.trim() && shouldSetText(next.keyDecisions)) next.keyDecisions = extracted.keyDecisions.trim();
+  if (extracted.nextSteps.trim() && shouldSetText(next.nextSteps)) next.nextSteps = extracted.nextSteps.trim();
+
+  if (extracted.budgetAllocated != null && shouldSetNumber(next.budgetAllocated)) next.budgetAllocated = extracted.budgetAllocated;
+  if (extracted.budgetSpent != null && shouldSetNumber(next.budgetSpent)) next.budgetSpent = extracted.budgetSpent;
+  if (extracted.budgetForecast != null && shouldSetNumber(next.budgetForecast)) next.budgetForecast = extracted.budgetForecast;
+
+  const extractedIncidents = extracted.incidents.map(inc => ({
+    id: generateId(),
+    date: inc.date || '',
+    title: inc.title || '',
+    description: inc.description || '',
+    severity: inc.severity || 'Minor',
+    status: inc.status || 'Open',
+  }));
+  if (extractedIncidents.length > 0) {
+    if (!preserveExisting || next.incidents.length === 0) {
+      next.incidents = extractedIncidents;
+    } else {
+      next.incidents = mergeUniqueByKey(next.incidents, extractedIncidents, inc =>
+        [normalizeKeyPart(inc.date), normalizeKeyPart(inc.title), inc.severity, inc.status].join('|')
+      );
+    }
   }
 
-  if (extracted.news.length > 0) {
-    next.news = extracted.news.map(item => ({
-      id: generateId(),
-      date: item.date || '',
-      title: item.title || '',
-      description: item.description || '',
-      type: item.type || 'Info',
-    }));
+  const extractedUpdates = extracted.updates.map(upd => ({
+    id: generateId(),
+    date: upd.date || '',
+    category: upd.category || 'Other',
+    title: upd.title || '',
+    description: upd.description || '',
+    impact: isRAG(upd.impact) ? upd.impact : 'Green',
+  }));
+  if (extractedUpdates.length > 0) {
+    if (!preserveExisting || next.updates.length === 0) {
+      next.updates = extractedUpdates;
+    } else {
+      next.updates = mergeUniqueByKey(next.updates, extractedUpdates, upd =>
+        [normalizeKeyPart(upd.date), normalizeKeyPart(upd.title), upd.category, upd.impact].join('|')
+      );
+    }
   }
 
-  if (extracted.milestones.length > 0) {
-    next.milestones = extracted.milestones.map(m => ({
-      id: generateId(),
-      name: m.name || '',
-      plannedDate: m.plannedDate || '',
-      revisedDate: m.revisedDate || undefined,
-      status: isRAG(m.status) ? m.status : 'Green',
-      completionPct: m.completionPct != null ? clampPct(m.completionPct) : 0,
-    }));
+  const extractedNews = extracted.news.map(item => ({
+    id: generateId(),
+    date: item.date || '',
+    title: item.title || '',
+    description: item.description || '',
+    type: item.type || 'Info',
+  }));
+  if (extractedNews.length > 0) {
+    if (!preserveExisting || next.news.length === 0) {
+      next.news = extractedNews;
+    } else {
+      next.news = mergeUniqueByKey(next.news, extractedNews, item =>
+        [normalizeKeyPart(item.date), normalizeKeyPart(item.title), item.type].join('|')
+      );
+    }
   }
 
-  if (extracted.risks.length > 0) {
-    next.risks = extracted.risks.map(r => ({
-      id: generateId(),
-      description: r.description || '',
-      likelihood: r.likelihood || 'Medium',
-      impact: r.impact || 'Medium',
-      mitigation: r.mitigation || '',
-      owner: r.owner || '',
-    }));
+  const extractedMilestones = extracted.milestones.map(m => ({
+    id: generateId(),
+    name: m.name || '',
+    plannedDate: m.plannedDate || '',
+    revisedDate: m.revisedDate || undefined,
+    status: isRAG(m.status) ? m.status : 'Green',
+    completionPct: m.completionPct != null ? clampPct(m.completionPct) : 0,
+  }));
+  if (extractedMilestones.length > 0) {
+    if (!preserveExisting || next.milestones.length === 0) {
+      next.milestones = extractedMilestones;
+    } else {
+      next.milestones = mergeUniqueByKey(next.milestones, extractedMilestones, m =>
+        [normalizeKeyPart(m.name), normalizeKeyPart(m.plannedDate), normalizeKeyPart(m.revisedDate), m.status].join('|')
+      );
+    }
+  }
+
+  const extractedRisks = extracted.risks.map(r => ({
+    id: generateId(),
+    description: r.description || '',
+    likelihood: r.likelihood || 'Medium',
+    impact: r.impact || 'Medium',
+    mitigation: r.mitigation || '',
+    owner: r.owner || '',
+  }));
+  if (extractedRisks.length > 0) {
+    if (!preserveExisting || next.risks.length === 0) {
+      next.risks = extractedRisks;
+    } else {
+      next.risks = mergeUniqueByKey(next.risks, extractedRisks, r =>
+        [normalizeKeyPart(r.description), normalizeKeyPart(r.owner), r.likelihood, r.impact].join('|')
+      );
+    }
   }
 
   return next;
+};
+
+const mergePrefillFromProjectIntoReport = (
+  report: PMReportData,
+  project: Project,
+  usersById: Record<string, User>
+): PMReportData => {
+  const extracted = buildProjectTaskPrefillDraft(project, usersById);
+  return mergeExtractedDataIntoReport(report, extracted, { preserveExisting: true });
 };
 
 // ════════════════════════════════════════
@@ -812,6 +1108,7 @@ const PMReport: React.FC<PMReportProps> = ({
   });
   const [versionPanelProject, setVersionPanelProject] = useState<string | null>(null);
   const [showAIPMModal, setShowAIPMModal] = useState(false);
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
 
   const allProjects = useMemo(() => {
     const projects: (Project & { teamName: string })[] = [];
@@ -828,6 +1125,14 @@ const PMReport: React.FC<PMReportProps> = ({
     });
     return map;
   }, [teams]);
+
+  const usersById = useMemo(() => {
+    const map: Record<string, User> = {};
+    users.forEach(user => {
+      map[user.id] = user;
+    });
+    return map;
+  }, [users]);
 
   const getProjectVersions = (projectId: string): PMReportData[] => {
     return pmReportData
@@ -850,6 +1155,7 @@ const PMReport: React.FC<PMReportProps> = ({
     setEditingReport({ ...report });
     setVersionPanelProject(null);
     setShowAIPMModal(false);
+    setPrefillNotice(null);
     setView('data-entry');
   };
 
@@ -863,6 +1169,7 @@ const PMReport: React.FC<PMReportProps> = ({
     setEditingReport(newReport);
     setVersionPanelProject(null);
     setShowAIPMModal(false);
+    setPrefillNotice(null);
     setView('data-entry');
   };
 
@@ -884,7 +1191,20 @@ const PMReport: React.FC<PMReportProps> = ({
     onSavePMReport(toSave);
     setView('overview');
     setShowAIPMModal(false);
+    setPrefillNotice(null);
     setEditingReport(null);
+  };
+
+  const handlePrefillFromProjectData = () => {
+    if (!editingReport) return;
+    const project = allProjects.find(p => p.id === editingReport.projectId);
+    if (!project) return;
+
+    setEditingReport(current => {
+      if (!current) return current;
+      return mergePrefillFromProjectIntoReport(current, project, usersById);
+    });
+    setPrefillNotice('Form pre-filled from existing project data and visible tasks. AI PM Report can now complete remaining missing fields.');
   };
 
   // ─── Report generation ───
@@ -1042,15 +1362,28 @@ ${generatedHTML}</body></html>`;
             </div>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={handlePrefillFromProjectData}
+              disabled={!project}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Sparkles className="w-4 h-4" /> Prefill Project Data
+            </button>
             <button onClick={() => setShowAIPMModal(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors">
               <Bot className="w-4 h-4" /> AI PM Report
             </button>
-            <button onClick={() => { setView('overview'); setEditingReport(null); setShowAIPMModal(false); }} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+            <button onClick={() => { setView('overview'); setEditingReport(null); setShowAIPMModal(false); setPrefillNotice(null); }} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
             <button onClick={handleSave} className="flex items-center gap-2 px-5 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
               <Save className="w-4 h-4" /> Save
             </button>
           </div>
         </div>
+
+        {prefillNotice && (
+          <div className="mb-4 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 px-4 py-2.5 text-xs text-emerald-800 dark:text-emerald-200">
+            {prefillNotice}
+          </div>
+        )}
 
         {/* VERSION LABEL */}
         <div className="mb-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
@@ -1495,7 +1828,8 @@ ${generatedHTML}</body></html>`;
           llmConfig={llmConfig}
           onClose={() => setShowAIPMModal(false)}
           onApply={(extracted) => {
-            setEditingReport(current => current ? mergeExtractedDataIntoReport(current, extracted) : current);
+            setEditingReport(current => current ? mergeExtractedDataIntoReport(current, extracted, { preserveExisting: true }) : current);
+            setPrefillNotice('AI PM Report applied in completion mode: existing fields were preserved and only missing information was added when available.');
             setShowAIPMModal(false);
           }}
         />

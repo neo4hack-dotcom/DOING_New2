@@ -150,6 +150,10 @@ export const sanitizeAppState = (data: any): AppState => {
             ? Math.max(0, Math.min(100, Math.round(Number(item.progressPct))))
             : 0,
         isMilestone: item.isMilestone === true,
+        isMajorDelivery: item.isMajorDelivery === true,
+        dependsOnIds: Array.isArray(item.dependsOnIds)
+            ? item.dependsOnIds.filter((id: any) => typeof id === 'string')
+            : [],
         notes: typeof item.notes === 'string' ? item.notes : '',
     }));
 

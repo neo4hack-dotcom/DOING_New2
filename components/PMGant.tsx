@@ -7,10 +7,12 @@ import {
   Eye,
   FileBarChart,
   GanttChartSquare,
+  Link2,
   Mail,
   Plus,
   Save,
   Sparkles,
+  Star,
   Trash2,
   Wand2
 } from 'lucide-react';
@@ -47,6 +49,8 @@ interface PMGantFormState {
   status: PMGanttStatus;
   priority: PMGanttPriority;
   isMilestone: boolean;
+  isMajorDelivery: boolean;
+  dependsOnIds: string[];
   notes: string;
 }
 
@@ -89,6 +93,9 @@ const plusDaysISO = (days: number): string => {
 
 const clampPct = (value: number): number => Math.max(0, Math.min(100, Math.round(value)));
 const normalizeTitle = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const isMajorDeliveryItem = (item: PMGanttItem): boolean =>
+  item.isMajorDelivery === true || (item.isMilestone === true && item.priority === 'Critical');
 
 const parseDate = (value: string): Date | null => {
   if (!value) return null;
@@ -152,23 +159,42 @@ const buildPMGantDeckHTML = (
     .project-summary{background:#f8fafc;border-left:4px solid #00915A;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;color:#334155;margin-bottom:12px}
     .milestone-list{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px 0}
     .milestone-tag{font-size:10px;font-weight:700;color:#065f46;background:#d1fae5;border:1px solid #a7f3d0;padding:3px 8px;border-radius:999px}
-    .timeline-head{display:grid;grid-template-columns:260px 100px 90px 130px 70px 1fr;gap:10px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 0;border-bottom:1px solid #e2e8f0}
-    .gantt-row{display:grid;grid-template-columns:260px 100px 90px 130px 70px 1fr;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;page-break-inside:avoid;break-inside:avoid-page}
+    .dependency-overview{background:#fffbea;border:1px solid #fde68a;border-radius:10px;padding:8px 10px;margin-bottom:10px}
+    .dependency-overview-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#92400e;margin-bottom:4px}
+    .dependency-item{font-size:10px;color:#78350f;line-height:1.4}
+    .timeline-head{display:grid;grid-template-columns:250px 100px 90px 130px 90px 1fr;gap:10px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 0;border-bottom:1px solid #e2e8f0}
+    .gantt-row{display:grid;grid-template-columns:250px 100px 90px 130px 90px 1fr;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;page-break-inside:avoid;break-inside:avoid-page}
     .gantt-row:last-child{border-bottom:none}
     .task-cell{font-size:12px;color:#0f172a}
     .task-cell strong{display:block;font-size:12px}
     .task-desc{font-size:10px;color:#64748b;margin-top:2px;line-height:1.4}
+    .task-meta-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+    .meta-pill{font-size:9px;font-weight:700;padding:2px 6px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155}
+    .meta-pill.parallel{background:#eef2ff;border-color:#c7d2fe;color:#3730a3}
+    .meta-pill.dep{background:#eff6ff;border-color:#bfdbfe;color:#1e40af}
+    .meta-pill.major{background:#fff7ed;border-color:#fdba74;color:#9a3412}
     .owner-cell,.status-cell,.date-cell,.prog-cell{font-size:11px;color:#334155}
     .status-chip{display:inline-flex;padding:2px 8px;border-radius:999px;font-weight:700;color:#fff;font-size:10px;white-space:nowrap}
     .progress-pill{display:inline-flex;min-width:42px;justify-content:center;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;background:#e2e8f0;color:#0f172a}
+    .prog-flags{margin-top:3px;font-size:9px;color:#64748b;line-height:1.3}
     .timeline-wrap{position:relative}
-    .timeline-axis{position:relative;height:18px;margin-bottom:6px}
+    .timeline-axis{position:relative;height:20px;margin-bottom:6px}
     .axis-line{position:absolute;top:0;bottom:0;border-left:1px dashed #cbd5e1}
     .axis-label{position:absolute;top:0;transform:translateX(-50%);font-size:9px;color:#64748b;white-space:nowrap;background:#fff;padding:0 3px}
-    .timeline-track{position:relative;height:22px;border-radius:7px;background:#f8fafc;border:1px solid #dbe5ef;overflow:visible}
+    .today-axis-line{position:absolute;top:0;bottom:0;border-left:1px solid #ef4444;opacity:.75}
+    .today-axis-label{position:absolute;top:10px;transform:translateX(-50%);font-size:9px;font-weight:800;color:#b91c1c;background:#fee2e2;border:1px solid #fca5a5;border-radius:999px;padding:0 6px}
+    .timeline-track{position:relative;height:24px;border-radius:7px;background:#f8fafc;border:1px solid #dbe5ef;overflow:visible}
     .timeline-grid-line{position:absolute;top:0;bottom:0;border-left:1px dotted #e2e8f0}
-    .task-bar{position:absolute;top:4px;height:12px;border-radius:8px;box-shadow:0 1px 4px rgba(15,23,42,.2)}
-    .task-milestone{position:absolute;top:4px;width:12px;height:12px;transform:translateX(-50%) rotate(45deg);border-radius:2px;box-shadow:0 1px 4px rgba(15,23,42,.25)}
+    .timeline-today-line{position:absolute;top:0;bottom:0;border-left:1px solid #ef4444;opacity:.75}
+    .dependency-link{position:absolute;top:11px;height:2px;background:#2563eb;opacity:.7;border-radius:2px}
+    .dependency-link.overlap{background:#f59e0b}
+    .task-bar{position:absolute;top:5px;height:12px;border-radius:8px;box-shadow:0 1px 4px rgba(15,23,42,.2)}
+    .task-bar.milestone-bar{background:linear-gradient(90deg,#64748b,#0ea5e9)}
+    .task-edge{position:absolute;top:4px;width:10px;height:10px;border-radius:999px;border:2px solid #fff;box-shadow:0 1px 3px rgba(15,23,42,.2)}
+    .task-edge.start{transform:translateX(-50%)}
+    .task-edge.end{transform:translateX(-50%)}
+    .task-done-dot{position:absolute;top:8px;width:8px;height:8px;border-radius:999px;background:#16a34a;border:1px solid #fff;transform:translateX(-50%);box-shadow:0 0 0 1px rgba(22,163,74,.28)}
+    .task-major-star{position:absolute;top:-3px;transform:translateX(-50%);font-size:12px;color:#d4a017;text-shadow:0 1px 2px rgba(0,0,0,.2)}
     .empty-state{padding:14px;border:1px dashed #cbd5e1;border-radius:10px;font-size:12px;color:#64748b;background:#f8fafc}
     @media print{
       .deck{max-width:none}
@@ -176,6 +202,7 @@ const buildPMGantDeckHTML = (
       .project-body{padding:10px 12px}
       .timeline-head{font-size:9px}
       .gantt-row{padding:6px 0}
+      .today-axis-label{font-size:8px}
     }
   </style>`;
 
@@ -193,14 +220,25 @@ const buildPMGantDeckHTML = (
       ? summaryEntry.keyMilestones
       : sortedItems.filter(item => item.isMilestone).map(item => item.title).slice(0, 4);
 
-    const validDates = sortedItems
+    const timelineSource = sortedItems.filter(item => item.isMilestone).length > 0
+      ? sortedItems.filter(item => item.isMilestone)
+      : sortedItems;
+
+    const validDates = timelineSource
       .flatMap(item => [parseDate(item.startDate), parseDate(item.endDate)])
       .filter((date): date is Date => date instanceof Date);
 
-    const minDate = validDates.length > 0 ? new Date(Math.min(...validDates.map(date => date.getTime()))) : new Date(`${todayISO()}T00:00:00`);
-    let maxDate = validDates.length > 0 ? new Date(Math.max(...validDates.map(date => date.getTime()))) : addDays(minDate, 30);
+    const minRawDate = validDates.length > 0 ? new Date(Math.min(...validDates.map(date => date.getTime()))) : new Date(`${todayISO()}T00:00:00`);
+    let maxRawDate = validDates.length > 0 ? new Date(Math.max(...validDates.map(date => date.getTime()))) : addDays(minRawDate, 30);
+    if (maxRawDate.getTime() <= minRawDate.getTime()) maxRawDate = addDays(minRawDate, 14);
+    const minDate = addDays(minRawDate, -2);
+    let maxDate = addDays(maxRawDate, 2);
     if (maxDate.getTime() <= minDate.getTime()) maxDate = addDays(minDate, 14);
     const totalMs = Math.max(24 * 3600 * 1000, maxDate.getTime() - minDate.getTime());
+    const toPct = (date: Date): number => Math.max(0, Math.min(100, ((date.getTime() - minDate.getTime()) / totalMs) * 100));
+
+    const today = parseDate(todayISO()) || new Date(`${todayISO()}T00:00:00`);
+    const todayPct = toPct(today);
 
     const axisLabels = tickPercents.map(percent => {
       const d = new Date(minDate.getTime() + (totalMs * percent) / 100);
@@ -210,31 +248,118 @@ const buildPMGantDeckHTML = (
       };
     });
 
-    const rowsHTML = sortedItems.map(item => {
+    const itemById = new Map(sortedItems.map(item => [item.id, item]));
+    const positionById = new Map<string, { start: Date; end: Date; startPct: number; endPct: number }>();
+
+    sortedItems.forEach(item => {
       const start = parseDate(item.startDate) || minDate;
       const rawEnd = parseDate(item.endDate) || start;
       const end = rawEnd.getTime() < start.getTime() ? start : rawEnd;
-      const leftPct = ((start.getTime() - minDate.getTime()) / totalMs) * 100;
-      const rightPct = ((end.getTime() - minDate.getTime()) / totalMs) * 100;
-      const widthPct = Math.max(item.isMilestone ? 0 : 2, rightPct - leftPct);
+      positionById.set(item.id, {
+        start,
+        end,
+        startPct: toPct(start),
+        endPct: toPct(end),
+      });
+    });
+
+    const overlapCountById = new Map<string, number>();
+    sortedItems.forEach(item => {
+      const pos = positionById.get(item.id);
+      if (!pos) {
+        overlapCountById.set(item.id, 0);
+        return;
+      }
+      const count = sortedItems.filter(other => {
+        if (other.id === item.id) return false;
+        const otherPos = positionById.get(other.id);
+        if (!otherPos) return false;
+        return pos.start.getTime() <= otherPos.end.getTime() && otherPos.start.getTime() <= pos.end.getTime();
+      }).length;
+      overlapCountById.set(item.id, count);
+    });
+
+    const dependencyChains = sortedItems.flatMap(item =>
+      (item.dependsOnIds || [])
+        .map(depId => {
+          const dep = itemById.get(depId);
+          if (!dep) return null;
+          return { from: dep.title, to: item.title };
+        })
+        .filter((entry): entry is { from: string; to: string } => Boolean(entry))
+    );
+
+    const rowsHTML = sortedItems.map(item => {
+      const pos = positionById.get(item.id);
+      if (!pos) return '';
+      const leftPct = pos.startPct;
+      const rightPct = pos.endPct;
+      const widthPct = Math.max(item.isMilestone ? 1 : 2, rightPct - leftPct);
       const color = STATUS_COLORS[item.status] || '#64748b';
+      const overlapCount = overlapCountById.get(item.id) || 0;
+      const dependencyTitles = (item.dependsOnIds || [])
+        .map(depId => itemById.get(depId)?.title)
+        .filter((title): title is string => Boolean(title));
+      const dependencyEnds = (item.dependsOnIds || [])
+        .map(depId => positionById.get(depId)?.endPct)
+        .filter((pct): pct is number => Number.isFinite(pct));
+      const dependencySignalLabel =
+        dependencyTitles.length === 0
+          ? 'No dependency'
+          : dependencyTitles.length === 1
+            ? '1 dependency'
+            : `${dependencyTitles.length} dependencies`;
+
+      let dependencyLinkHTML = '';
+      if (dependencyEnds.length > 0) {
+        const anchorPct = Math.max(...dependencyEnds);
+        const left = Math.min(anchorPct, leftPct);
+        const width = Math.max(0.6, Math.abs(leftPct - anchorPct));
+        const overlapClass = anchorPct > leftPct ? ' overlap' : '';
+        dependencyLinkHTML = `<span class="dependency-link${overlapClass}" style="left:${left}%;width:${width}%"></span>`;
+      }
+
+      const doneMarker = (item.status === 'Done' || item.progressPct >= 100)
+        ? `<span class="task-done-dot" style="left:${rightPct}%"></span>`
+        : '';
+      const majorDelivery = isMajorDeliveryItem(item);
+      const majorMarker = majorDelivery
+        ? `<span class="task-major-star" style="left:${rightPct}%">★</span>`
+        : '';
 
       return `
       <div class="gantt-row">
         <div class="task-cell">
           <strong>${escapeHTML(item.title || 'Untitled')}</strong>
           ${item.description ? `<div class="task-desc">${escapeHTML(item.description)}</div>` : ''}
+          ${item.isMilestone ? `<div class="task-desc">Milestone window: ${escapeHTML(formatShortDate(item.startDate))} → ${escapeHTML(formatShortDate(item.endDate))}</div>` : ''}
+          <div class="task-meta-badges">
+            ${overlapCount > 0 ? `<span class="meta-pill parallel">Parallel with ${overlapCount} item${overlapCount > 1 ? 's' : ''}</span>` : ''}
+            ${dependencyTitles.length > 0 ? `<span class="meta-pill dep">Depends on: ${escapeHTML(dependencyTitles.join(' • '))}</span>` : ''}
+            ${majorDelivery ? `<span class="meta-pill major">Major Delivery ★</span>` : ''}
+          </div>
         </div>
         <div class="owner-cell">${escapeHTML(item.owner || '—')}</div>
         <div class="status-cell"><span class="status-chip" style="background:${color}">${escapeHTML(item.status)}</span></div>
         <div class="date-cell">${escapeHTML(formatShortDate(item.startDate))} → ${escapeHTML(formatShortDate(item.endDate))}</div>
-        <div class="prog-cell"><span class="progress-pill">${clampPct(item.progressPct)}%</span></div>
+        <div class="prog-cell">
+          <span class="progress-pill">${clampPct(item.progressPct)}%</span>
+          <div class="prog-flags">${dependencySignalLabel}</div>
+        </div>
         <div class="timeline-wrap">
           <div class="timeline-track">
             ${tickPercents.map(percent => `<span class="timeline-grid-line" style="left:${percent}%"></span>`).join('')}
+            <span class="timeline-today-line" style="left:${todayPct}%"></span>
+            ${dependencyLinkHTML}
             ${item.isMilestone
-              ? `<div class="task-milestone" style="left:${leftPct}%;background:${color}"></div>`
+              ? `
+                <div class="task-bar milestone-bar" style="left:${leftPct}%;width:${widthPct}%;background:${color}"></div>
+                <span class="task-edge start" style="left:${leftPct}%;background:${color}"></span>
+                <span class="task-edge end" style="left:${rightPct}%;background:${color}"></span>
+              `
               : `<div class="task-bar" style="left:${leftPct}%;width:${widthPct}%;background:${color}"></div>`}
+            ${doneMarker}
+            ${majorMarker}
           </div>
         </div>
       </div>`;
@@ -254,13 +379,19 @@ const buildPMGantDeckHTML = (
         ${milestoneTags.length > 0
           ? `<div class="milestone-list">${milestoneTags.map(m => `<span class="milestone-tag">${escapeHTML(m)}</span>`).join('')}</div>`
           : ''}
+        ${dependencyChains.length > 0 ? `
+          <div class="dependency-overview">
+            <div class="dependency-overview-title">Dependency Chains</div>
+            ${dependencyChains.slice(0, 8).map(dep => `<div class="dependency-item">${escapeHTML(dep.from)} → ${escapeHTML(dep.to)}</div>`).join('')}
+          </div>
+        ` : ''}
         ${sortedItems.length > 0 ? `
           <div class="timeline-head">
             <div>Roadmap Item</div>
             <div>Owner</div>
             <div>Status</div>
             <div>Dates</div>
-            <div>Progress</div>
+            <div>Signals</div>
             <div>Timeline</div>
           </div>
           <div class="timeline-axis">
@@ -268,6 +399,8 @@ const buildPMGantDeckHTML = (
               <span class="axis-line" style="left:${t.percent}%"></span>
               <span class="axis-label" style="left:${t.percent}%">${escapeHTML(t.label)}</span>
             `).join('')}
+            <span class="today-axis-line" style="left:${todayPct}%"></span>
+            <span class="today-axis-label" style="left:${todayPct}%">Today</span>
           </div>
           ${rowsHTML}
         ` : `<div class="empty-state">No roadmap items defined yet for this project.</div>`}
@@ -355,6 +488,8 @@ const PMGant: React.FC<PMGantProps> = ({
     status: 'Planned',
     priority: 'Medium',
     isMilestone: false,
+    isMajorDelivery: false,
+    dependsOnIds: [],
     notes: '',
   });
 
@@ -378,6 +513,31 @@ const PMGant: React.FC<PMGantProps> = ({
         return a.title.localeCompare(b.title);
       });
   }, [gantItems, selectedProjectIds]);
+
+  const dependencyOptions = useMemo(() => {
+    return gantItems
+      .filter(item => item.projectId === form.projectId && item.id !== editingItemId)
+      .sort((a, b) => {
+        const aStart = parseDate(a.startDate)?.getTime() || 0;
+        const bStart = parseDate(b.startDate)?.getTime() || 0;
+        if (aStart !== bStart) return aStart - bStart;
+        return a.title.localeCompare(b.title);
+      });
+  }, [gantItems, form.projectId, editingItemId]);
+
+  useEffect(() => {
+    setForm(prev => {
+      const validIds = prev.dependsOnIds.filter(depId => dependencyOptions.some(option => option.id === depId));
+      if (validIds.length === prev.dependsOnIds.length) return prev;
+      return { ...prev, dependsOnIds: validIds };
+    });
+  }, [dependencyOptions]);
+
+  const gantItemById = useMemo(() => {
+    const map = new Map<string, PMGanttItem>();
+    gantItems.forEach(item => map.set(item.id, item));
+    return map;
+  }, [gantItems]);
 
   const saveDraftItems = (
     projectId: string,
@@ -432,6 +592,8 @@ const PMGant: React.FC<PMGantProps> = ({
         status: (draft.status && STATUS_VALUES.includes(draft.status as PMGanttStatus)) ? (draft.status as PMGanttStatus) : 'Planned',
         priority: (draft.priority && PRIORITY_VALUES.includes(draft.priority as PMGanttPriority)) ? (draft.priority as PMGanttPriority) : 'Medium',
         isMilestone: draft.isMilestone !== false,
+        isMajorDelivery: (draft.isMilestone !== false) && draft.priority === 'Critical',
+        dependsOnIds: [],
         notes: (draft.notes || '').trim(),
       };
       onSaveItem(nextItem);
@@ -455,6 +617,8 @@ const PMGant: React.FC<PMGantProps> = ({
       status: 'Planned',
       priority: 'Medium',
       isMilestone: false,
+      isMajorDelivery: false,
+      dependsOnIds: [],
       notes: '',
     });
     setAiInput('');
@@ -471,6 +635,15 @@ const PMGant: React.FC<PMGantProps> = ({
   const handleSelectAll = () => setSelectedProjectIds(allProjects.map(project => project.id));
   const handleClearSelection = () => setSelectedProjectIds([]);
 
+  const toggleDependency = (dependencyId: string) => {
+    setForm(prev => ({
+      ...prev,
+      dependsOnIds: prev.dependsOnIds.includes(dependencyId)
+        ? prev.dependsOnIds.filter(id => id !== dependencyId)
+        : [...prev.dependsOnIds, dependencyId],
+    }));
+  };
+
   const handleEditItem = (item: PMGanttItem) => {
     setEditingItemId(item.id);
     setForm({
@@ -484,6 +657,8 @@ const PMGant: React.FC<PMGantProps> = ({
       status: item.status,
       priority: item.priority,
       isMilestone: item.isMilestone === true,
+      isMajorDelivery: item.isMajorDelivery === true,
+      dependsOnIds: Array.isArray(item.dependsOnIds) ? item.dependsOnIds : [],
       notes: item.notes || '',
     });
     if (!selectedProjectIds.includes(item.projectId)) {
@@ -507,6 +682,13 @@ const PMGant: React.FC<PMGantProps> = ({
     if (!start || !end) return alert('Invalid dates.');
     if (end.getTime() < start.getTime()) return alert('End date must be on or after start date.');
 
+    const sanitizedDependsOnIds = Array.from(new Set(
+      form.dependsOnIds.filter(depId =>
+        depId !== editingItemId &&
+        gantItems.some(item => item.projectId === form.projectId && item.id === depId)
+      )
+    ));
+
     const now = new Date().toISOString();
     const existing = editingItemId ? gantItems.find(item => item.id === editingItemId) : null;
     const nextItem: PMGanttItem = {
@@ -524,6 +706,8 @@ const PMGant: React.FC<PMGantProps> = ({
       status: form.status,
       priority: form.priority,
       isMilestone: form.isMilestone,
+      isMajorDelivery: form.isMajorDelivery,
+      dependsOnIds: sanitizedDependsOnIds,
       notes: form.notes.trim(),
     };
 
@@ -549,10 +733,20 @@ const PMGant: React.FC<PMGantProps> = ({
         owner: extracted.owner || prev.owner,
         startDate: extracted.startDate || prev.startDate,
         endDate: extracted.endDate || prev.endDate,
-        status: extracted.status || prev.status,
-        priority: extracted.priority || prev.priority,
+        ...(() => {
+          const nextStatus = extracted.status || prev.status;
+          const nextPriority = extracted.priority || prev.priority;
+          const nextIsMilestone = extracted.isMilestone != null ? extracted.isMilestone : prev.isMilestone;
+          return {
+            status: nextStatus,
+            priority: nextPriority,
+            isMilestone: nextIsMilestone,
+            isMajorDelivery: nextIsMilestone
+              ? (prev.isMajorDelivery || nextPriority === 'Critical')
+              : false,
+          };
+        })(),
         progressPct: extracted.progressPct != null ? clampPct(extracted.progressPct) : prev.progressPct,
-        isMilestone: extracted.isMilestone != null ? extracted.isMilestone : prev.isMilestone,
         notes: extracted.notes || prev.notes,
       }));
     } catch (e: any) {
@@ -877,7 +1071,7 @@ ${generatedHTML}</body></html>`;
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Project</label>
               <select
                 value={form.projectId}
-                onChange={e => setForm(prev => ({ ...prev, projectId: e.target.value }))}
+                onChange={e => setForm(prev => ({ ...prev, projectId: e.target.value, dependsOnIds: [] }))}
                 className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
               >
                 <option value="">Select project...</option>
@@ -989,11 +1183,56 @@ ${generatedHTML}</body></html>`;
                 <input
                   type="checkbox"
                   checked={form.isMilestone}
-                  onChange={e => setForm(prev => ({ ...prev, isMilestone: e.target.checked }))}
+                  onChange={e => setForm(prev => ({
+                    ...prev,
+                    isMilestone: e.target.checked,
+                    isMajorDelivery: e.target.checked ? prev.isMajorDelivery : false
+                  }))}
                   className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
                 />
                 Milestone item
               </label>
+            </div>
+            <div className="flex items-end">
+              <label className={`inline-flex items-center gap-2 text-sm font-medium ${form.isMilestone ? 'text-gray-700 dark:text-gray-300' : 'text-gray-400 dark:text-gray-500'} cursor-pointer`}>
+                <input
+                  type="checkbox"
+                  checked={form.isMajorDelivery}
+                  disabled={!form.isMilestone}
+                  onChange={e => setForm(prev => ({ ...prev, isMajorDelivery: e.target.checked }))}
+                  className="w-4 h-4 rounded border-gray-300 text-amber-500 focus:ring-amber-500 disabled:opacity-50"
+                />
+                Major delivery (gold star)
+              </label>
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Dependencies</label>
+              {dependencyOptions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+                  No dependency candidate yet for this project. Create at least one other roadmap item first.
+                </div>
+              ) : (
+                <div className="max-h-28 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-2 bg-gray-50 dark:bg-gray-800/40 space-y-1">
+                  {dependencyOptions.map(option => {
+                    const checked = form.dependsOnIds.includes(option.id);
+                    return (
+                      <label key={option.id} className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDependency(option.id)}
+                          className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="truncate">{option.title}</span>
+                        <span className="text-gray-400 dark:text-gray-500">({formatShortDate(option.startDate)} → {formatShortDate(option.endDate)})</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                Dependencies will be shown in the Gant export to visualize sequence and critical chaining.
+              </p>
             </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Notes (optional)</label>
@@ -1079,6 +1318,9 @@ ${generatedHTML}</body></html>`;
           <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
             {selectedItems.map(item => {
               const project = projectById.get(item.projectId);
+              const dependencyTitles = (item.dependsOnIds || [])
+                .map(depId => gantItemById.get(depId)?.title)
+                .filter((title): title is string => Boolean(title));
               return (
                 <div key={item.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40">
                   <div className="flex items-start justify-between gap-3">
@@ -1106,9 +1348,16 @@ ${generatedHTML}</body></html>`;
                     <span className={`px-2 py-0.5 rounded-full border font-bold ${priorityBadgeClass(item.priority)}`}>{item.priority}</span>
                     <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">{item.progressPct}%</span>
                     {item.isMilestone && <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700 font-bold">Milestone</span>}
+                    {isMajorDeliveryItem(item) && <span className="px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-700 font-bold">Major Delivery ★</span>}
+                    {dependencyTitles.length > 0 && <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 font-bold">Depends on {dependencyTitles.length}</span>}
                     <span className="text-gray-500 dark:text-gray-400">{formatShortDate(item.startDate)} → {formatShortDate(item.endDate)}</span>
                   </div>
                   {item.description && <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{item.description}</p>}
+                  {dependencyTitles.length > 0 && (
+                    <p className="mt-1 text-[11px] text-blue-700 dark:text-blue-300">
+                      <span className="font-semibold">Dependencies:</span> {dependencyTitles.join(' • ')}
+                    </p>
+                  )}
                 </div>
               );
             })}

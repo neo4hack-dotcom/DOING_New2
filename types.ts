@@ -361,6 +361,8 @@ export interface PMGanttItem {
   status: PMGanttStatus;
   priority: PMGanttPriority;
   isMilestone?: boolean;
+  isMajorDelivery?: boolean; // Highlights major delivery milestones with a gold star
+  dependsOnIds?: string[]; // Dependencies to other PM Gant item IDs in the same project
   notes?: string;
 }
 
