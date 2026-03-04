@@ -19,9 +19,10 @@ import SmartTodoManager from './components/SmartTodoManager';
 import KanbanView from './components/KanbanView';
 import OneOffQueryManager from './components/OneOffQueryManager';
 import PMReport from './components/PMReport';
+import PMGant from './components/PMGant';
 
 import { loadState, saveState, subscribeToStoreUpdates, updateAppState, fetchFromServer, generateId, sanitizeAppState } from './services/storage';
-import { AppState, User, Team, UserRole, Meeting, LLMConfig, WeeklyReport as WeeklyReportType, WorkingGroup, SystemMessage, AppNotification, SmartTodo, OneOffQuery, PMReportData } from './types';
+import { AppState, User, Team, UserRole, Meeting, LLMConfig, WeeklyReport as WeeklyReportType, WorkingGroup, SystemMessage, AppNotification, SmartTodo, OneOffQuery, PMReportData, PMGanttItem } from './types';
 import { Bell, Sun, Moon, Bot, RefreshCw, Cloud, CloudOff } from 'lucide-react';
 
 interface ErrorBoundaryProps {
@@ -147,6 +148,11 @@ const getFilteredState = (state: AppState): AppState => {
         return null; // Hide team completely
     }).filter(t => t !== null) as Team[];
 
+    const visibleProjectIds = new Set(
+        filteredTeams.flatMap(team => (team.projects || []).map(project => project.id))
+    );
+    const filteredPMGantData = (state.pmGantData || []).filter(item => visibleProjectIds.has(item.projectId));
+
     return {
         ...state,
         users: filteredUsers,
@@ -155,6 +161,7 @@ const getFilteredState = (state: AppState): AppState => {
         meetings: filteredMeetings,
         workingGroups: filteredGroups,
         smartTodos: myTodos,
+        pmGantData: filteredPMGantData,
         notifications: state.notifications || [],
         dismissedAlerts: state.dismissedAlerts || {}
     };
@@ -813,6 +820,18 @@ const AppContent: React.FC = () => {
     pmReportData: (curr.pmReportData || []).filter(r => r.id !== id)
   }));
 
+  const handleSavePMGantItem = createHandler((curr, item: PMGanttItem) => {
+    const items = curr.pmGantData || [];
+    const idx = items.findIndex(existing => existing.id === item.id);
+    const next = [...items];
+    if (idx >= 0) next[idx] = item; else next.push(item);
+    return { ...curr, pmGantData: next };
+  });
+  const handleDeletePMGantItem = createHandler((curr, id: string) => ({
+    ...curr,
+    pmGantData: (curr.pmGantData || []).filter(item => item.id !== id)
+  }));
+
   const handleUpdateLLMConfig = (config: LLMConfig, prompts?: Record<string, string>) => {
       const newState = updateAppState(curr => ({...curr, llmConfig: config, prompts: prompts || curr.prompts}));
       setAppState(newState);
@@ -853,8 +872,11 @@ const AppContent: React.FC = () => {
   }
 
   const getPageTitle = () => {
+      if (activeTab === 'pm-gant') return 'PM Gant';
       return activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace('-', ' ');
   }
+
+  const canAccessPMGant = viewState.teams.some(team => (team.projects || []).length > 0);
 
   return (
     <div className="flex bg-gray-50 dark:bg-gray-950 min-h-screen font-sans transition-colors duration-200">
@@ -902,6 +924,7 @@ const AppContent: React.FC = () => {
         currentUser={appState.currentUser}
         activeTab={activeTab}
         onTabChange={setActiveTab}
+        showPMGant={canAccessPMGant}
         onLogout={handleLogout}
       />
 
@@ -1001,6 +1024,7 @@ const AppContent: React.FC = () => {
             {activeTab === 'smart-todo' && appState.currentUser && <SmartTodoManager todos={viewState.smartTodos || []} currentUser={appState.currentUser} llmConfig={appState.llmConfig} onSaveTodo={handleSaveTodo} onDeleteTodo={handleDeleteTodo} users={appState.users} onAddNotification={addNotification} />}
             {activeTab === 'one-off-queries' && appState.currentUser && <OneOffQueryManager queries={appState.oneOffQueries || []} teams={viewState.teams} users={appState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} onSaveQuery={handleSaveOneOffQuery} onDeleteQuery={handleDeleteOneOffQuery} />}
             {activeTab === 'pm-report' && appState.currentUser && <PMReport teams={viewState.teams} users={viewState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} pmReportData={appState.pmReportData || []} onSavePMReport={handleSavePMReport} onDeletePMReport={handleDeletePMReport} />}
+            {activeTab === 'pm-gant' && appState.currentUser && <PMGant teams={viewState.teams} users={viewState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} gantItems={viewState.pmGantData || []} onSaveItem={handleSavePMGantItem} onDeleteItem={handleDeletePMGantItem} />}
             {activeTab === 'admin-users' && <AdminPanel users={appState.users} teams={appState.teams} onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser} onAddTeam={handleAddTeam} onUpdateTeam={handleUpdateTeam} onDeleteTeam={handleDeleteTeam} />}
             {activeTab === 'settings' && <SettingsPanel config={appState.llmConfig} appState={appState} onSave={handleUpdateLLMConfig} onImport={handleImportState} onUpdateUserPassword={handleUpdateUserPassword} onUpdateSystemMessage={handleUpdateSystemMessage} />}
         </div>

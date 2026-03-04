@@ -5,10 +5,10 @@ import {
   CheckCircle2, TrendingUp, Shield, Megaphone, Target, Calendar,
   DollarSign, Users, Sparkles, Download, Edit3, Eye,
   CircleDot, Info, ChevronUp, Activity, Copy, History, Tag,
-  Bot, Paperclip, Loader2, X, Send
+  Bot, Paperclip, Loader2, X, Send, Mail
 } from 'lucide-react';
 import {
-  Team, User, Project, LLMConfig, PMReportData,
+  Team, User, Project, LLMConfig, PMReportData, PMReportCostSplit, PMReportConfidentiality,
   RAGStatus
 } from '../types';
 import { generateId } from '../services/storage';
@@ -55,10 +55,13 @@ const createEmptyReport = (projectId: string, userId: string, version: number = 
   id: generateId(), projectId, userId,
   createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   version, versionLabel: `v${version} — ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+  confidentialityLevel: 'Confidential',
   overallStatus: 'Green', scopeStatus: 'Green', scheduleStatus: 'Green', budgetStatus: 'Green', resourceStatus: 'Green',
   executiveSummary: '', keyDecisions: '', nextSteps: '',
   incidents: [], updates: [], news: [], milestones: [], risks: [],
-  budgetAllocated: 0, budgetSpent: 0, budgetForecast: 0, overallCompletionPct: 0,
+  budgetAllocated: 0, budgetSpent: 0, budgetForecast: 0,
+  costDistribution: [],
+  overallCompletionPct: 0,
 });
 
 const cloneReport = (src: PMReportData, newVersion: number): PMReportData => ({
@@ -71,6 +74,24 @@ const cloneReport = (src: PMReportData, newVersion: number): PMReportData => ({
 });
 
 const formatMD = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} MD`;
+
+const CONFIDENTIALITY_LEVELS: PMReportConfidentiality[] = [
+  'Public',
+  'Internal',
+  'Confidential',
+  'Strictly Confidential',
+];
+
+const CONFIDENTIALITY_RANK: Record<PMReportConfidentiality, number> = {
+  Public: 0,
+  Internal: 1,
+  Confidential: 2,
+  'Strictly Confidential': 3,
+};
+
+const getReportConfidentiality = (report: PMReportData): PMReportConfidentiality => {
+  return report.confidentialityLevel || 'Confidential';
+};
 
 const getIncidentRAGStatus = (report: PMReportData): RAGStatus => {
   if (report.incidents.length === 0) return 'Green';
@@ -172,10 +193,19 @@ const mergeExtractedDataIntoReport = (report: PMReportData, extracted: PMReportE
 // ════════════════════════════════════════
 //  FALLBACK HTML GENERATOR (consulting-deck style)
 // ════════════════════════════════════════
-const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }; report: PMReportData }[]) => {
+const buildConsultingDeckHTML = (
+  data: { project: Project & { teamName: string }; report: PMReportData }[],
+  teamNameById: Record<string, string> = {}
+) => {
   const rc = (s: RAGStatus) => s === 'Green' ? '#10b981' : s === 'Amber' ? '#f59e0b' : '#ef4444';
   const rcBg = (s: RAGStatus) => s === 'Green' ? '#ecfdf5' : s === 'Amber' ? '#fffbeb' : '#fef2f2';
   const now = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const highestConfidentiality: PMReportConfidentiality = data.length
+    ? data.reduce<PMReportConfidentiality>((highest, item) => {
+        const current = getReportConfidentiality(item.report);
+        return CONFIDENTIALITY_RANK[current] > CONFIDENTIALITY_RANK[highest] ? current : highest;
+      }, 'Public')
+    : 'Confidential';
 
   const css = `
     <style>
@@ -185,17 +215,21 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       .deck-header h1{margin:0;font-size:26px;font-weight:800;background:linear-gradient(135deg,#00915A,#00A86B);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
       .deck-header .sub{font-size:12px;color:#64748b;margin-top:4px}
       .deck-header .conf{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
-      .project-block{margin-bottom:24px;page-break-inside:avoid;break-inside:avoid-page}
+      .project-block{margin-bottom:24px;page-break-inside:avoid;break-inside:avoid-page;display:flex;flex-direction:column}
       .prj-banner{background:linear-gradient(135deg,#00915A 0%,#00A86B 50%,#007A4C 100%);color:#fff;padding:18px 24px;border-radius:14px 14px 0 0;display:flex;justify-content:space-between;align-items:center}
       .prj-banner h2{margin:0;font-size:20px;font-weight:700;letter-spacing:-0.3px}
       .prj-banner .meta{font-size:11px;opacity:.8;margin-top:3px}
       .prj-banner .pct{font-size:28px;font-weight:800;letter-spacing:-1px}
       .prj-banner .pct-label{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:1px}
-      .prj-body{border:1px solid #e2e8f0;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#fff}
+      .prj-body{border:1px solid #e2e8f0;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#fff;display:flex;flex-direction:column;min-height:620px}
+      .prj-main{display:flex;flex-direction:column}
       .prj-body.compact{padding:18px}
       .report-section{margin-bottom:18px;page-break-inside:avoid;break-inside:avoid-page}
       .report-section.allow-split{page-break-inside:auto;break-inside:auto}
       .report-section:last-child{margin-bottom:0}
+      .cost-bottom{margin-top:auto;padding-top:14px;border-top:2px solid #e2e8f0}
+      .cost-bottom .section-title{margin-bottom:12px}
+      .cost-split-title{margin-top:14px;margin-bottom:8px;font-size:11px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:.45px}
       .rag-row{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap}
       .rag-card{flex:1;min-width:100px;text-align:center;padding:14px 8px;border-radius:10px;border:1px solid #e2e8f0;background:#fafbfc}
       .rag-circle{width:24px;height:24px;border-radius:50%;margin:0 auto 8px;box-shadow:0 0 12px rgba(0,0,0,.15)}
@@ -238,6 +272,7 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       .prj-body.compact table.deck-table th{padding:7px 8px;font-size:10px}
       .prj-body.compact table.deck-table td{padding:7px 8px;font-size:11px}
       .prj-body.compact .update-item{padding:6px 0}
+      .prj-body.compact .cost-bottom{padding-top:10px}
 
       @media print {
         .deck{max-width:none}
@@ -245,15 +280,20 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
         .project-block{margin-bottom:16px;page-break-inside:avoid;break-inside:avoid-page}
         .prj-banner{padding:12px 16px}
         .prj-banner .pct{font-size:24px}
-        .prj-body{padding:16px}
+        .prj-body{padding:16px;min-height:540px}
         .report-section{margin-bottom:12px;page-break-inside:avoid;break-inside:avoid-page}
         .report-section.allow-split{page-break-inside:auto;break-inside:auto}
+        .cost-bottom{margin-top:auto}
         .prj-body.compact{padding:14px;font-size:11px}
       }
     </style>`;
 
   const projectBlocks = data.map(({ project, report }) => {
-    const budgetPct = (report.budgetAllocated || 0) > 0 ? Math.round(((report.budgetSpent || 0) / (report.budgetAllocated || 1)) * 100) : 0;
+    const confidentiality = getReportConfidentiality(report);
+    const budgetAllocated = report.budgetAllocated || 0;
+    const budgetSpent = report.budgetSpent || 0;
+    const budgetForecast = report.budgetForecast || 0;
+    const budgetPct = budgetAllocated > 0 ? Math.round((budgetSpent / (budgetAllocated || 1)) * 100) : 0;
     const incidentStatus = getIncidentRAGStatus(report);
     const ragIndicators: Array<{ label: string; status: RAGStatus }> = [
       { label: 'Overall', status: report.overallStatus },
@@ -264,6 +304,13 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       { label: 'Incident', status: incidentStatus },
     ];
 
+    const costDistribution = (report.costDistribution || []).filter(split => split.teamId);
+    const hasCostMetrics =
+      budgetAllocated > 0 ||
+      budgetSpent > 0 ||
+      budgetForecast > 0 ||
+      costDistribution.length > 0;
+
     const densityScore = report.milestones.length + report.incidents.length + report.risks.length + report.updates.length + report.news.length;
     const isCompact = densityScore > 16 || report.executiveSummary.length > 420 || report.keyDecisions.length > 320 || report.nextSteps.length > 320;
 
@@ -272,7 +319,7 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       <div class="prj-banner">
         <div>
           <h2>${project.name}</h2>
-          <div class="meta">${project.teamName} &bull; ${project.status} &bull; Deadline: ${project.deadline} &bull; v${report.version}</div>
+          <div class="meta">${project.teamName} &bull; ${project.status} &bull; Deadline: ${project.deadline} &bull; ${confidentiality} &bull; v${report.version}</div>
         </div>
         <div style="text-align:right">
           <div class="pct">${report.overallCompletionPct}%</div>
@@ -280,130 +327,152 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
         </div>
       </div>
       <div class="prj-body ${isCompact ? 'compact' : ''}">
-        <section class="report-section">
-          <div class="rag-row">
-            ${ragIndicators.map(({ label, status }) => {
-              return `<div class="rag-card" style="background:${rcBg(status)}">
-                <div class="rag-circle" style="background:${rc(status)}"></div>
-                <div class="rag-label">${label}</div>
-              </div>`;
-            }).join('')}
-          </div>
-        </section>
+        <div class="prj-main">
+          <section class="report-section">
+            <div class="rag-row">
+              ${ragIndicators.map(({ label, status }) => {
+                return `<div class="rag-card" style="background:${rcBg(status)}">
+                  <div class="rag-circle" style="background:${rc(status)}"></div>
+                  <div class="rag-label">${label}</div>
+                </div>`;
+              }).join('')}
+            </div>
+          </section>
 
-        <section class="report-section">
-          <div class="card-summary card-blue"><strong style="color:#006B46">Executive Summary</strong><br/>${report.executiveSummary || 'No executive summary provided.'}</div>
-        </section>
+          <section class="report-section">
+            <div class="card-summary card-blue"><strong style="color:#006B46">Executive Summary</strong><br/>${report.executiveSummary || 'No executive summary provided.'}</div>
+          </section>
 
-        <section class="report-section">
-          <div class="progress-wrap">
-            <div class="progress-label"><span>Overall Progress</span><span style="color:#00915A">${report.overallCompletionPct}%</span></div>
-            <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${report.overallCompletionPct}%"></div></div>
-          </div>
-        </section>
+          ${report.incidents.length > 0 ? `
+          <section class="report-section allow-split">
+            <div class="section-title"><div class="dot" style="background:#ef4444"></div>Incidents</div>
+            <table class="deck-table">
+              <thead>
+                <tr><th style="width:80px">Severity</th><th>Incident</th><th style="width:200px">Description</th><th style="width:90px">Status</th><th style="width:90px">Date</th></tr>
+              </thead>
+              <tbody>
+                ${report.incidents.map(inc => `<tr>
+                  <td><span class="severity-badge sev-${inc.severity.toLowerCase()}">${inc.severity}</span></td>
+                  <td style="font-weight:600">${inc.title}</td>
+                  <td style="font-size:11px;color:#64748b">${inc.description}</td>
+                  <td><span class="status-badge" style="background:${inc.status === 'Resolved' ? '#d1fae5' : inc.status === 'Investigating' ? '#fef3c7' : '#fee2e2'};color:${inc.status === 'Resolved' ? '#065f46' : inc.status === 'Investigating' ? '#92400e' : '#991b1b'}">${inc.status}</span></td>
+                  <td style="font-size:11px;color:#64748b">${inc.date}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </section>` : ''}
 
-        ${(report.budgetAllocated || 0) > 0 ? `
-        <section class="report-section">
+          <section class="report-section">
+            <div class="progress-wrap">
+              <div class="progress-label"><span>Overall Progress</span><span style="color:#00915A">${report.overallCompletionPct}%</span></div>
+              <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${report.overallCompletionPct}%"></div></div>
+            </div>
+          </section>
+
+          ${report.milestones.length > 0 ? `
+          <section class="report-section allow-split">
+            <div class="section-title"><div class="dot"></div>Milestone Tracker</div>
+            <table class="deck-table">
+              <thead>
+                <tr><th>Milestone</th><th style="text-align:center">Planned</th><th style="text-align:center">Revised</th><th style="text-align:center">Status</th><th style="text-align:center;width:160px">Progress</th></tr>
+              </thead>
+              <tbody>
+                ${report.milestones.map(m => `<tr>
+                  <td style="font-weight:600">${m.name}</td>
+                  <td style="text-align:center;font-size:11px">${m.plannedDate}</td>
+                  <td style="text-align:center;font-size:11px;${m.revisedDate && m.revisedDate > m.plannedDate ? 'color:#ef4444;font-weight:700' : ''}">${m.revisedDate || '—'}</td>
+                  <td style="text-align:center"><div style="width:14px;height:14px;border-radius:50%;background:${rc(m.status)};margin:0 auto;box-shadow:0 0 6px ${rc(m.status)}40"></div></td>
+                  <td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden"><div style="height:100%;width:${m.completionPct}%;background:linear-gradient(90deg,#00915A,#00A86B);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:#00915A;min-width:32px;text-align:right">${m.completionPct}%</span></div></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </section>` : ''}
+
+          ${report.risks.length > 0 ? `
+          <section class="report-section allow-split">
+            <div class="section-title"><div class="dot" style="background:#f59e0b"></div>Risk Register</div>
+            <table class="deck-table">
+              <thead>
+                <tr><th>Risk</th><th style="width:85px;text-align:center">Likelihood</th><th style="width:85px;text-align:center">Impact</th><th>Mitigation</th><th style="width:90px">Owner</th></tr>
+              </thead>
+              <tbody>
+                ${report.risks.map(r => `<tr>
+                  <td style="font-weight:600">${r.description}</td>
+                  <td style="text-align:center"><span class="likelihood-badge" style="background:${r.likelihood === 'High' ? '#fee2e2' : r.likelihood === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.likelihood === 'High' ? '#991b1b' : r.likelihood === 'Medium' ? '#92400e' : '#065f46'}">${r.likelihood}</span></td>
+                  <td style="text-align:center"><span class="likelihood-badge" style="background:${r.impact === 'High' ? '#fee2e2' : r.impact === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.impact === 'High' ? '#991b1b' : r.impact === 'Medium' ? '#92400e' : '#065f46'}">${r.impact}</span></td>
+                  <td style="font-size:11px;color:#475569">${r.mitigation}</td>
+                  <td style="font-size:11px;font-weight:600">${r.owner}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </section>` : ''}
+
+          ${report.updates.length > 0 ? `
+          <section class="report-section allow-split">
+            <div class="section-title"><div class="dot" style="background:#3b82f6"></div>Key Updates</div>
+            <div>
+              ${report.updates.map(u => `<div class="update-item">
+                <div class="update-dot" style="background:${rc(u.impact)}"></div>
+                <div><span class="cat-tag">${u.category}</span> <span style="font-size:12px;font-weight:600;margin-left:4px">${u.title}</span><div style="font-size:11px;color:#64748b;margin-top:3px">${u.description}</div></div>
+              </div>`).join('')}
+            </div>
+          </section>` : ''}
+
+          ${report.news.length > 0 ? `
+          <section class="report-section allow-split">
+            <div class="section-title"><div class="dot" style="background:#10b981"></div>News & Achievements</div>
+            <div>
+              ${report.news.map(n => `<div class="update-item">
+                <span class="news-type" style="background:${n.type === 'Achievement' ? '#d1fae5' : n.type === 'Change' ? '#fef3c7' : '#e0e7ff'};color:${n.type === 'Achievement' ? '#065f46' : n.type === 'Change' ? '#92400e' : '#3730a3'}">${n.type}</span>
+                <div><div style="font-size:12px;font-weight:600">${n.title}</div><div style="font-size:11px;color:#64748b;margin-top:2px">${n.description}</div></div>
+              </div>`).join('')}
+            </div>
+          </section>` : ''}
+
+          ${report.keyDecisions ? `<section class="report-section"><div class="card-summary card-amber"><strong style="color:#92400e">Key Decisions</strong><br/>${report.keyDecisions}</div></section>` : ''}
+          ${report.nextSteps ? `<section class="report-section"><div class="card-summary card-green"><strong style="color:#065f46">Next Steps</strong><br/>${report.nextSteps}</div></section>` : ''}
+        </div>
+
+        ${hasCostMetrics ? `
+        <section class="report-section cost-bottom">
           <div class="section-title"><div class="dot"></div>Cost Overview (MD)</div>
           <div class="metric-row">
-            <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">${formatMD(report.budgetAllocated || 0)}</div></div>
-            <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">${formatMD(report.budgetSpent || 0)}</div></div>
-            <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${(report.budgetForecast || 0) > (report.budgetAllocated || 0) ? '#ef4444' : '#10b981'}">${formatMD(report.budgetForecast || 0)}</div></div>
+            <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">${formatMD(budgetAllocated)}</div></div>
+            <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">${formatMD(budgetSpent)}</div></div>
+            <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${budgetForecast > budgetAllocated ? '#ef4444' : '#10b981'}">${formatMD(budgetForecast)}</div></div>
             <div class="metric-box"><div class="metric-label">Utilization</div>
               <div class="metric-value" style="color:${budgetPct > 90 ? '#ef4444' : budgetPct > 70 ? '#f59e0b' : '#10b981'}">${budgetPct}%</div>
             </div>
           </div>
-        </section>` : ''}
 
-        ${report.milestones.length > 0 ? `
-        <section class="report-section allow-split">
-          <div class="section-title"><div class="dot"></div>Milestone Tracker</div>
-          <table class="deck-table">
-            <thead>
-              <tr><th>Milestone</th><th style="text-align:center">Planned</th><th style="text-align:center">Revised</th><th style="text-align:center">Status</th><th style="text-align:center;width:160px">Progress</th></tr>
-            </thead>
-            <tbody>
-              ${report.milestones.map(m => `<tr>
-                <td style="font-weight:600">${m.name}</td>
-                <td style="text-align:center;font-size:11px">${m.plannedDate}</td>
-                <td style="text-align:center;font-size:11px;${m.revisedDate && m.revisedDate > m.plannedDate ? 'color:#ef4444;font-weight:700' : ''}">${m.revisedDate || '—'}</td>
-                <td style="text-align:center"><div style="width:14px;height:14px;border-radius:50%;background:${rc(m.status)};margin:0 auto;box-shadow:0 0 6px ${rc(m.status)}40"></div></td>
-                <td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden"><div style="height:100%;width:${m.completionPct}%;background:linear-gradient(90deg,#00915A,#00A86B);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:#00915A;min-width:32px;text-align:right">${m.completionPct}%</span></div></td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
+          ${costDistribution.length > 0 ? `
+            <div class="cost-split-title">Cost Distribution by Team (manual)</div>
+            <table class="deck-table">
+              <thead>
+                <tr><th>Team</th><th style="text-align:right">Allocated (MD)</th><th style="text-align:right">Spent (MD)</th><th style="text-align:right">Forecast (MD)</th></tr>
+              </thead>
+              <tbody>
+                ${costDistribution.map(split => {
+                  const teamName = teamNameById[split.teamId] || split.teamId;
+                  return `<tr>
+                    <td style="font-weight:600">${teamName}</td>
+                    <td style="text-align:right">${formatMD(split.allocatedMD || 0)}</td>
+                    <td style="text-align:right">${formatMD(split.spentMD || 0)}</td>
+                    <td style="text-align:right">${formatMD(split.forecastMD || 0)}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          ` : ''}
         </section>` : ''}
-
-        ${report.incidents.length > 0 ? `
-        <section class="report-section allow-split">
-          <div class="section-title"><div class="dot" style="background:#ef4444"></div>Incidents</div>
-          <table class="deck-table">
-            <thead>
-              <tr><th style="width:80px">Severity</th><th>Incident</th><th style="width:200px">Description</th><th style="width:90px">Status</th><th style="width:90px">Date</th></tr>
-            </thead>
-            <tbody>
-              ${report.incidents.map(inc => `<tr>
-                <td><span class="severity-badge sev-${inc.severity.toLowerCase()}">${inc.severity}</span></td>
-                <td style="font-weight:600">${inc.title}</td>
-                <td style="font-size:11px;color:#64748b">${inc.description}</td>
-                <td><span class="status-badge" style="background:${inc.status === 'Resolved' ? '#d1fae5' : inc.status === 'Investigating' ? '#fef3c7' : '#fee2e2'};color:${inc.status === 'Resolved' ? '#065f46' : inc.status === 'Investigating' ? '#92400e' : '#991b1b'}">${inc.status}</span></td>
-                <td style="font-size:11px;color:#64748b">${inc.date}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </section>` : ''}
-
-        ${report.risks.length > 0 ? `
-        <section class="report-section allow-split">
-          <div class="section-title"><div class="dot" style="background:#f59e0b"></div>Risk Register</div>
-          <table class="deck-table">
-            <thead>
-              <tr><th>Risk</th><th style="width:85px;text-align:center">Likelihood</th><th style="width:85px;text-align:center">Impact</th><th>Mitigation</th><th style="width:90px">Owner</th></tr>
-            </thead>
-            <tbody>
-              ${report.risks.map(r => `<tr>
-                <td style="font-weight:600">${r.description}</td>
-                <td style="text-align:center"><span class="likelihood-badge" style="background:${r.likelihood === 'High' ? '#fee2e2' : r.likelihood === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.likelihood === 'High' ? '#991b1b' : r.likelihood === 'Medium' ? '#92400e' : '#065f46'}">${r.likelihood}</span></td>
-                <td style="text-align:center"><span class="likelihood-badge" style="background:${r.impact === 'High' ? '#fee2e2' : r.impact === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.impact === 'High' ? '#991b1b' : r.impact === 'Medium' ? '#92400e' : '#065f46'}">${r.impact}</span></td>
-                <td style="font-size:11px;color:#475569">${r.mitigation}</td>
-                <td style="font-size:11px;font-weight:600">${r.owner}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </section>` : ''}
-
-        ${report.updates.length > 0 ? `
-        <section class="report-section allow-split">
-          <div class="section-title"><div class="dot" style="background:#3b82f6"></div>Key Updates</div>
-          <div>
-            ${report.updates.map(u => `<div class="update-item">
-              <div class="update-dot" style="background:${rc(u.impact)}"></div>
-              <div><span class="cat-tag">${u.category}</span> <span style="font-size:12px;font-weight:600;margin-left:4px">${u.title}</span><div style="font-size:11px;color:#64748b;margin-top:3px">${u.description}</div></div>
-            </div>`).join('')}
-          </div>
-        </section>` : ''}
-
-        ${report.news.length > 0 ? `
-        <section class="report-section allow-split">
-          <div class="section-title"><div class="dot" style="background:#10b981"></div>News & Achievements</div>
-          <div>
-            ${report.news.map(n => `<div class="update-item">
-              <span class="news-type" style="background:${n.type === 'Achievement' ? '#d1fae5' : n.type === 'Change' ? '#fef3c7' : '#e0e7ff'};color:${n.type === 'Achievement' ? '#065f46' : n.type === 'Change' ? '#92400e' : '#3730a3'}">${n.type}</span>
-              <div><div style="font-size:12px;font-weight:600">${n.title}</div><div style="font-size:11px;color:#64748b;margin-top:2px">${n.description}</div></div>
-            </div>`).join('')}
-          </div>
-        </section>` : ''}
-
-        ${report.keyDecisions ? `<section class="report-section"><div class="card-summary card-amber"><strong style="color:#92400e">Key Decisions</strong><br/>${report.keyDecisions}</div></section>` : ''}
-        ${report.nextSteps ? `<section class="report-section"><div class="card-summary card-green"><strong style="color:#065f46">Next Steps</strong><br/>${report.nextSteps}</div></section>` : ''}
       </div>
     </div>`;
   }).join('');
 
   return `${css}<div class="deck">
     <div class="deck-header">
-      <div><h1>Project Status Report</h1><div class="sub">Generated ${now} &bull; ${data.length} project${data.length > 1 ? 's' : ''}</div></div>
-      <div style="text-align:right"><div class="conf">Confidential</div></div>
+      <div><h1>DOINg - Project Status Report</h1><div class="sub">Generated ${now} &bull; ${data.length} project${data.length > 1 ? 's' : ''}</div></div>
+      <div style="text-align:right"><div class="conf">Confidentiality: ${highestConfidentiality}</div></div>
     </div>
     ${projectBlocks}
   </div>`;
@@ -750,6 +819,14 @@ const PMReport: React.FC<PMReportProps> = ({
     return projects;
   }, [teams]);
 
+  const teamNameById = useMemo(() => {
+    const map: Record<string, string> = {};
+    teams.forEach(team => {
+      map[team.id] = team.name;
+    });
+    return map;
+  }, [teams]);
+
   const getProjectVersions = (projectId: string): PMReportData[] => {
     return pmReportData
       .filter(r => r.projectId === projectId)
@@ -832,7 +909,7 @@ const PMReport: React.FC<PMReportProps> = ({
       }
 
       // Deterministic export format to avoid style drift between generations.
-      const html = buildConsultingDeckHTML(reportsForGeneration);
+      const html = buildConsultingDeckHTML(reportsForGeneration, teamNameById);
       setGeneratedHTML(html);
       setView('report-preview');
     } catch (err) {
@@ -844,18 +921,49 @@ const PMReport: React.FC<PMReportProps> = ({
   };
 
   // ─── PDF Export ───
-  const handleExportPDF = () => {
-    const w = window.open('', '_blank');
-    if (!w) return;
-    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>PM Status Report</title>
+  const buildExportDocumentHTML = (withPrintControls: boolean) => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>PM Status Report</title>
 <style>@page{size:landscape;margin:9mm}@media print{body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;font-size:11.5px;line-height:1.35}.no-print{display:none!important}.deck{max-width:none}.project-block,.report-section,.rag-card,.metric-box,.update-item{break-inside:avoid-page;page-break-inside:avoid}table,tr,th,td{break-inside:avoid-page;page-break-inside:avoid}thead{display:table-header-group}}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#1e293b;background:#fff;padding:20px;font-size:12px}</style>
 </head><body>
+${withPrintControls ? `
 <div class="no-print" style="text-align:center;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:12px;border:1px solid #e2e8f0">
   <button onclick="window.print()" style="background:linear-gradient(135deg,#00915A,#00A86B);color:#fff;border:none;padding:14px 40px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,145,90,.3)">Print / Save as PDF</button>
   <button onclick="window.close()" style="margin-left:14px;background:#fff;color:#374151;border:1px solid #d1d5db;padding:14px 28px;border-radius:10px;font-size:15px;cursor:pointer">Cancel</button>
   <p style="margin-top:10px;font-size:12px;color:#64748b">Use your browser's print dialog to save as PDF in landscape orientation</p>
-</div>${generatedHTML}</body></html>`);
+</div>` : ''}
+${generatedHTML}</body></html>`;
+
+  const handleExportPDF = () => {
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.write(buildExportDocumentHTML(true));
     w.document.close();
+  };
+
+  const handleExportOutlookEmail = () => {
+    if (!generatedHTML.trim()) return;
+    const subjectDate = new Date().toLocaleDateString('en-GB');
+    const fileDate = new Date().toISOString().split('T')[0];
+    const htmlBody = buildExportDocumentHTML(false);
+    const emlContent = [
+      'X-Unsent: 1',
+      'To: ',
+      `Subject: PM Status Report - ${subjectDate}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      htmlBody
+    ].join('\r\n');
+
+    const blob = new Blob([emlContent], { type: 'message/rfc822;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `pm-status-report-${fileDate}.eml`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   // ════════════════════════════════════════
@@ -878,6 +986,47 @@ const PMReport: React.FC<PMReportProps> = ({
 
     const ic = "w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none";
     const tc = `${ic} resize-none`;
+    const costDistribution = editingReport.costDistribution || [];
+
+    const updateCostSplit = (splitId: string, field: keyof PMReportCostSplit, value: string | number) => {
+      const nextSplits = costDistribution.map(split =>
+        split.id === splitId ? { ...split, [field]: value } : split
+      );
+      setEditingReport({ ...editingReport, costDistribution: nextSplits });
+    };
+
+    const addCostSplit = () => {
+      const defaultTeamId = teams[0]?.id || '';
+      if (!defaultTeamId) return;
+      setEditingReport({
+        ...editingReport,
+        costDistribution: [
+          ...costDistribution,
+          { id: generateId(), teamId: defaultTeamId, allocatedMD: 0, spentMD: 0, forecastMD: 0 }
+        ]
+      });
+    };
+
+    const removeCostSplit = (splitId: string) => {
+      setEditingReport({
+        ...editingReport,
+        costDistribution: costDistribution.filter(split => split.id !== splitId)
+      });
+    };
+
+    const splitTotals = costDistribution.reduce(
+      (acc, split) => ({
+        allocated: acc.allocated + (split.allocatedMD || 0),
+        spent: acc.spent + (split.spentMD || 0),
+        forecast: acc.forecast + (split.forecastMD || 0),
+      }),
+      { allocated: 0, spent: 0, forecast: 0 }
+    );
+
+    const hasSplitDelta =
+      Math.abs(splitTotals.allocated - (editingReport.budgetAllocated || 0)) > 0.1 ||
+      Math.abs(splitTotals.spent - (editingReport.budgetSpent || 0)) > 0.1 ||
+      Math.abs(splitTotals.forecast - (editingReport.budgetForecast || 0)) > 0.1;
 
     return (
       <div className="max-w-4xl mx-auto">
@@ -905,8 +1054,24 @@ const PMReport: React.FC<PMReportProps> = ({
 
         {/* VERSION LABEL */}
         <div className="mb-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
-          <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Version Label</label>
-          <input className={ic} value={editingReport.versionLabel} onChange={e => setEditingReport({ ...editingReport, versionLabel: e.target.value })} placeholder="e.g. v3 — Sprint 12 Closing" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Version Label</label>
+              <input className={ic} value={editingReport.versionLabel} onChange={e => setEditingReport({ ...editingReport, versionLabel: e.target.value })} placeholder="e.g. v3 — Sprint 12 Closing" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Confidentiality Level</label>
+              <select
+                className={ic}
+                value={getReportConfidentiality(editingReport)}
+                onChange={e => setEditingReport({ ...editingReport, confidentialityLevel: e.target.value as PMReportConfidentiality })}
+              >
+                {CONFIDENTIALITY_LEVELS.map(level => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* RAG */}
@@ -1073,6 +1238,86 @@ const PMReport: React.FC<PMReportProps> = ({
                 </div>
               </div>
             )}
+
+            <div className="mt-6 pt-5 border-t border-gray-200 dark:border-gray-800">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">Manual Team Cost Distribution</h4>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Distribute MD across teams manually if needed.</p>
+                </div>
+                <button
+                  onClick={addCostSplit}
+                  disabled={teams.length === 0}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors disabled:opacity-50"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Team Split
+                </button>
+              </div>
+
+              {costDistribution.length === 0 ? (
+                <div className="text-xs text-gray-500 dark:text-gray-400 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-3">
+                  No team distribution yet. Add lines to split allocated/spent/forecast MD across teams.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {costDistribution.map(split => (
+                    <div key={split.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                        <select
+                          className={ic}
+                          value={split.teamId}
+                          onChange={e => updateCostSplit(split.id, 'teamId', e.target.value)}
+                        >
+                          {teams.map(team => (
+                            <option key={team.id} value={team.id}>{team.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          className={ic}
+                          value={split.allocatedMD || ''}
+                          placeholder="Allocated (MD)"
+                          onChange={e => updateCostSplit(split.id, 'allocatedMD', parseFloat(e.target.value) || 0)}
+                        />
+                        <input
+                          type="number"
+                          className={ic}
+                          value={split.spentMD || ''}
+                          placeholder="Spent (MD)"
+                          onChange={e => updateCostSplit(split.id, 'spentMD', parseFloat(e.target.value) || 0)}
+                        />
+                        <input
+                          type="number"
+                          className={ic}
+                          value={split.forecastMD || ''}
+                          placeholder="Forecast (MD)"
+                          onChange={e => updateCostSplit(split.id, 'forecastMD', parseFloat(e.target.value) || 0)}
+                        />
+                        <button
+                          onClick={() => removeCostSplit(split.id)}
+                          className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+                    <div className="grid grid-cols-3 gap-3 text-xs">
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Allocated:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.allocated)}</span></div>
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Spent:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.spent)}</span></div>
+                      <div><span className="font-semibold text-gray-500 dark:text-gray-400">Split Forecast:</span> <span className="font-bold text-gray-800 dark:text-gray-100">{formatMD(splitTotals.forecast)}</span></div>
+                    </div>
+                    {hasSplitDelta && (
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-md px-2 py-1.5">
+                        Distribution totals differ from global cost fields (Allocated / Spent / Forecast). Adjust manually if you want exact alignment.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1091,6 +1336,9 @@ const PMReport: React.FC<PMReportProps> = ({
         </div>
         <div className="flex gap-2">
           <button onClick={() => setView('overview')} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Back</button>
+          <button onClick={handleExportOutlookEmail} className="flex items-center gap-2 px-5 py-2 text-sm font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors">
+            <Mail className="w-4 h-4" /> Export Email (.eml)
+          </button>
           <button onClick={handleExportPDF} className="flex items-center gap-2 px-5 py-2 text-sm font-bold text-white bg-gradient-to-r from-indigo-600 to-purple-600 rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all shadow-md"><Download className="w-4 h-4" /> Export PDF (Landscape)</button>
         </div>
       </div>

@@ -1,16 +1,17 @@
 
 import React from 'react';
-import { Briefcase, Settings, BarChart3, LogOut, BookOpen, Layers, Library, ClipboardList, LayoutDashboard, Users, CheckSquare, LayoutGrid, Zap, FileBarChart } from 'lucide-react';
+import { Briefcase, Settings, BarChart3, LogOut, BookOpen, Layers, Library, ClipboardList, LayoutDashboard, Users, CheckSquare, LayoutGrid, Zap, FileBarChart, GanttChartSquare } from 'lucide-react';
 import { User, UserRole } from '../types';
 
 interface SidebarProps {
   currentUser: User | null;
   activeTab: string;
   onTabChange: (tab: string) => void;
+  showPMGant?: boolean;
   onLogout: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, onLogout }) => {
+const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, showPMGant = false, onLogout }) => {
   const isAdmin = currentUser?.role === UserRole.ADMIN;
   const isExternalPM = currentUser?.role === UserRole.EXTERNAL_PM;
   const showManagement = isAdmin;
@@ -97,6 +98,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, 
           <FileBarChart className="w-4 h-4 mr-3" />
           PM Report
         </button>
+
+        {showPMGant && (
+          <button onClick={() => onTabChange('pm-gant')} className={navItemClass('pm-gant')}>
+            <GanttChartSquare className="w-4 h-4 mr-3" />
+            PM Gant
+          </button>
+        )}
 
         {/* Sub-category: Tools */}
         <p className={subSectionHeaderClass}>Tools</p>

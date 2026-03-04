@@ -36,6 +36,7 @@ export const sanitizeAppState = (data: any): AppState => {
         workingGroups: Array.isArray(data.workingGroups) ? data.workingGroups : [],
         smartTodos: Array.isArray(data.smartTodos) ? data.smartTodos : [],
         oneOffQueries: Array.isArray(data.oneOffQueries) ? data.oneOffQueries : [],
+        pmGantData: Array.isArray(data.pmGantData) ? data.pmGantData : [],
         pmReportData: Array.isArray(data.pmReportData) ? data.pmReportData : [],
         notifications: Array.isArray(data.notifications) ? data.notifications : [],
         dismissedAlerts: data.dismissedAlerts && typeof data.dismissedAlerts === 'object' ? data.dismissedAlerts : {},
@@ -87,6 +88,51 @@ export const sanitizeAppState = (data: any): AppState => {
             additionalDescriptions: Array.isArray(p.additionalDescriptions) ? p.additionalDescriptions : [],
             docUrls: Array.isArray(p.docUrls) ? p.docUrls : [],
         })) : [],
+    }));
+
+    state.pmReportData = state.pmReportData.map((r: any) => ({
+        ...r,
+        incidents: Array.isArray(r.incidents) ? r.incidents : [],
+        updates: Array.isArray(r.updates) ? r.updates : [],
+        news: Array.isArray(r.news) ? r.news : [],
+        milestones: Array.isArray(r.milestones) ? r.milestones : [],
+        risks: Array.isArray(r.risks) ? r.risks : [],
+        costDistribution: Array.isArray(r.costDistribution) ? r.costDistribution : [],
+        confidentialityLevel:
+            r.confidentialityLevel === 'Public' ||
+            r.confidentialityLevel === 'Internal' ||
+            r.confidentialityLevel === 'Confidential' ||
+            r.confidentialityLevel === 'Strictly Confidential'
+                ? r.confidentialityLevel
+                : 'Confidential',
+    }));
+
+    state.pmGantData = state.pmGantData.map((item: any) => ({
+        ...item,
+        title: typeof item.title === 'string' ? item.title : '',
+        description: typeof item.description === 'string' ? item.description : '',
+        owner: typeof item.owner === 'string' ? item.owner : '',
+        startDate: typeof item.startDate === 'string' ? item.startDate : '',
+        endDate: typeof item.endDate === 'string' ? item.endDate : '',
+        status:
+            item.status === 'Planned' ||
+            item.status === 'In Progress' ||
+            item.status === 'Done' ||
+            item.status === 'Blocked'
+                ? item.status
+                : 'Planned',
+        priority:
+            item.priority === 'Low' ||
+            item.priority === 'Medium' ||
+            item.priority === 'High' ||
+            item.priority === 'Critical'
+                ? item.priority
+                : 'Medium',
+        progressPct: Number.isFinite(Number(item.progressPct))
+            ? Math.max(0, Math.min(100, Math.round(Number(item.progressPct))))
+            : 0,
+        isMilestone: item.isMilestone === true,
+        notes: typeof item.notes === 'string' ? item.notes : '',
     }));
 
     return state;
@@ -157,6 +203,7 @@ const getDefaultState = (): AppState => {
         workingGroups: [],
         smartTodos: [],
         oneOffQueries: [],
+        pmGantData: [],
         pmReportData: [],
         notifications: [],
         dismissedAlerts: {},
