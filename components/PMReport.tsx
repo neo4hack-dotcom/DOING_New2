@@ -304,7 +304,9 @@ const buildConsultingDeckHTML = (
       { label: 'Incident', status: incidentStatus },
     ];
 
-    const costDistribution = (report.costDistribution || []).filter(split => split.teamId);
+    const costDistribution = (report.costDistribution || []).filter(split =>
+      Boolean((split.teamName || '').trim() || (split.teamId || '').trim())
+    );
     const hasCostMetrics =
       budgetAllocated > 0 ||
       budgetSpent > 0 ||
@@ -453,7 +455,7 @@ const buildConsultingDeckHTML = (
               </thead>
               <tbody>
                 ${costDistribution.map(split => {
-                  const teamName = teamNameById[split.teamId] || split.teamId;
+                  const teamName = (split.teamName || '').trim() || teamNameById[split.teamId || ''] || split.teamId || 'N/A';
                   return `<tr>
                     <td style="font-weight:600">${teamName}</td>
                     <td style="text-align:right">${formatMD(split.allocatedMD || 0)}</td>
@@ -996,13 +998,11 @@ ${generatedHTML}</body></html>`;
     };
 
     const addCostSplit = () => {
-      const defaultTeamId = teams[0]?.id || '';
-      if (!defaultTeamId) return;
       setEditingReport({
         ...editingReport,
         costDistribution: [
           ...costDistribution,
-          { id: generateId(), teamId: defaultTeamId, allocatedMD: 0, spentMD: 0, forecastMD: 0 }
+          { id: generateId(), teamName: '', allocatedMD: 0, spentMD: 0, forecastMD: 0 }
         ]
       });
     };
@@ -1243,12 +1243,11 @@ ${generatedHTML}</body></html>`;
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">Manual Team Cost Distribution</h4>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Distribute MD across teams manually if needed.</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Distribute MD manually with free team labels (not linked to DOINg teams).</p>
                 </div>
                 <button
                   onClick={addCostSplit}
-                  disabled={teams.length === 0}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" /> Add Team Split
                 </button>
@@ -1256,22 +1255,19 @@ ${generatedHTML}</body></html>`;
 
               {costDistribution.length === 0 ? (
                 <div className="text-xs text-gray-500 dark:text-gray-400 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-3">
-                  No team distribution yet. Add lines to split allocated/spent/forecast MD across teams.
+                  No team distribution yet. Add lines with your own team names to split allocated/spent/forecast MD.
                 </div>
               ) : (
                 <div className="space-y-3">
                   {costDistribution.map(split => (
                     <div key={split.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
                       <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                        <select
+                        <input
                           className={ic}
-                          value={split.teamId}
-                          onChange={e => updateCostSplit(split.id, 'teamId', e.target.value)}
-                        >
-                          {teams.map(team => (
-                            <option key={team.id} value={team.id}>{team.name}</option>
-                          ))}
-                        </select>
+                          value={split.teamName || ''}
+                          placeholder="Team name (free text)"
+                          onChange={e => updateCostSplit(split.id, 'teamName', e.target.value)}
+                        />
                         <input
                           type="number"
                           className={ic}
