@@ -95,9 +95,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, 
           </button>
         )}
 
+        {/* Sub-category: PM tools */}
+        <p className={subSectionHeaderClass}>PM tools</p>
+
         <button onClick={() => onTabChange('pm-report')} className={navItemClass('pm-report')}>
           <FileBarChart className="w-4 h-4 mr-3" />
-          PM Report
+          PM status report
         </button>
 
         {showPMProjectCard && (
