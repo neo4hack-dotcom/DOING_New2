@@ -12,6 +12,7 @@ import {
   GanttChartSquare,
   Mail,
   Plus,
+  Search,
   Sparkles,
   Trash2
 } from 'lucide-react';
@@ -805,6 +806,7 @@ const PMProjectCard: React.FC<PMProjectCardProps> = ({
   const [isGeneratingDocument, setIsGeneratingDocument] = useState(false);
   const [aiError, setAiError] = useState('');
   const [aiInfo, setAiInfo] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
 
   const inputClass = 'w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100';
   const labelClass = 'block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1';
@@ -869,6 +871,17 @@ const PMProjectCard: React.FC<PMProjectCardProps> = ({
   const selectedProjects = useMemo(() => {
     return allProjects.filter(project => selectedProjectIds.includes(project.id));
   }, [allProjects, selectedProjectIds]);
+
+  const filteredProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+    if (!query) return allProjects;
+    return allProjects.filter(project => {
+      const name = project.name.toLowerCase();
+      const team = (project.teamName || '').toLowerCase();
+      const status = (project.status || '').toLowerCase();
+      return name.includes(query) || team.includes(query) || status.includes(query);
+    });
+  }, [allProjects, projectSearch]);
 
   const selectedReports = useMemo(() => {
     return selectedProjects
@@ -1014,7 +1027,11 @@ const PMProjectCard: React.FC<PMProjectCardProps> = ({
     );
   };
 
-  const handleSelectAll = () => setSelectedProjectIds(allProjects.map(project => project.id));
+  const handleSelectAll = () => {
+    if (filteredProjects.length === 0) return;
+    const filteredIds = new Set(filteredProjects.map(project => project.id));
+    setSelectedProjectIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+  };
   const handleClearSelection = () => setSelectedProjectIds([]);
 
   const handleRebuildFromData = () => {
@@ -1317,8 +1334,19 @@ ${generatedHTML}
             </div>
           </div>
 
+          <div className="relative">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={projectSearch}
+              onChange={e => setProjectSearch(e.target.value)}
+              placeholder="Search project or team..."
+              className="w-full pl-10 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            />
+          </div>
+
           <div className="space-y-2 max-h-[270px] overflow-y-auto pr-1">
-            {allProjects.map(project => {
+            {filteredProjects.map(project => {
               const selected = selectedProjectIds.includes(project.id);
               const openBlockers = project.tasks.filter(task => task.status === 'Blocked').length;
               return (
@@ -1347,6 +1375,9 @@ ${generatedHTML}
             })}
             {allProjects.length === 0 && (
               <p className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center">No accessible project.</p>
+            )}
+            {allProjects.length > 0 && filteredProjects.length === 0 && (
+              <p className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center">No project matches your search.</p>
             )}
           </div>
 
