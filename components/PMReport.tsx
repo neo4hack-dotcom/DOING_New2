@@ -489,7 +489,7 @@ const mergePrefillFromProjectIntoReport = (
 // ════════════════════════════════════════
 //  FALLBACK HTML GENERATOR (consulting-deck style)
 // ════════════════════════════════════════
-const buildConsultingDeckHTML = (
+export const buildConsultingDeckHTML = (
   data: { project: Project & { teamName: string }; report: PMReportData }[],
   teamNameById: Record<string, string> = {}
 ) => {
@@ -774,6 +774,46 @@ const buildConsultingDeckHTML = (
     </div>
     ${projectBlocks}
   </div>`;
+};
+
+export const buildPMStatusReportHTMLFromSelection = (
+  projects: Array<Project & { teamName: string }>,
+  reports: PMReportData[],
+  selectedProjectIds: string[]
+): string => {
+  const latestByProject = new Map<string, PMReportData>();
+  reports.forEach(report => {
+    const current = latestByProject.get(report.projectId);
+    if (!current) {
+      latestByProject.set(report.projectId, report);
+      return;
+    }
+    const currentUpdated = new Date(current.updatedAt).getTime();
+    const candidateUpdated = new Date(report.updatedAt).getTime();
+    if ((report.version || 1) > (current.version || 1) || ((report.version || 1) === (current.version || 1) && candidateUpdated > currentUpdated)) {
+      latestByProject.set(report.projectId, report);
+    }
+  });
+
+  const teamNameById = projects.reduce<Record<string, string>>((acc, project) => {
+    acc[project.id] = project.teamName;
+    return acc;
+  }, {});
+
+  const data = selectedProjectIds
+    .map(projectId => {
+      const project = projects.find(p => p.id === projectId);
+      const report = latestByProject.get(projectId);
+      return project && report ? { project, report } : null;
+    })
+    .filter((item): item is { project: Project & { teamName: string }; report: PMReportData } => Boolean(item))
+    .sort((a, b) => {
+      const teamCompare = a.project.teamName.localeCompare(b.project.teamName);
+      if (teamCompare !== 0) return teamCompare;
+      return a.project.name.localeCompare(b.project.name);
+    });
+
+  return buildConsultingDeckHTML(data, teamNameById);
 };
 
 interface AIPMReportModalProps {

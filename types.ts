@@ -460,6 +460,47 @@ export interface PMReportData {
   overallCompletionPct: number;
 }
 
+// --- SMTP & PM EMAIL ORCHESTRATION ---
+export type SMTPSecurityMode = 'none' | 'ssl' | 'starttls';
+
+export interface SMTPConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  security: SMTPSecurityMode;
+  clientHostname: string;
+}
+
+export type PMEmailReportType = 'pm-status-report' | 'pm-project-card' | 'pm-gant';
+export type PMEmailJobStatus = 'pending' | 'sent' | 'failed' | 'cancelled';
+
+export interface PMEmailRecipients {
+  to: string[];
+  cc: string[];
+  bcc: string[];
+}
+
+export interface PMEmailJob {
+  id: string;
+  reportType: PMEmailReportType;
+  reportTitle: string;
+  subject: string;
+  htmlBody: string;
+  teamId?: string | null;
+  teamName?: string;
+  projectIds: string[];
+  projectNames: string[];
+  recipients: PMEmailRecipients;
+  createdByUserId: string;
+  createdAt: string;
+  scheduleAt: string; // ISO datetime
+  status: PMEmailJobStatus;
+  sentAt?: string;
+  lastTriedAt?: string;
+  lastError?: string;
+}
+
 // --- CONFIGURATION SYSTÈME ---
 // Message système affiché globalement dans l'application
 export interface SystemMessage {
@@ -480,6 +521,8 @@ export interface AppState {
   oneOffQueries: OneOffQuery[]; // Demandes ponctuelles (One off queries)
   pmGantData: PMGanttItem[]; // PM Gant roadmap items
   pmReportData: PMReportData[]; // PM Report data entries
+  smtpConfig: SMTPConfig; // SMTP configuration used for real email delivery
+  pmEmailJobs: PMEmailJob[]; // PM report email jobs (scheduled + history)
   notifications: AppNotification[]; // Notifications système
   dismissedAlerts: { [key: string]: string }; // Alertes rejetées (clé -> date ISO), stocké localement par utilisateur
   systemMessage?: SystemMessage; // Message système global

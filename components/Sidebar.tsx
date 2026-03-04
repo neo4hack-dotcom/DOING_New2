@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Briefcase, Settings, BarChart3, LogOut, BookOpen, Layers, Library, ClipboardList, LayoutDashboard, Users, CheckSquare, LayoutGrid, Zap, FileBarChart, GanttChartSquare } from 'lucide-react';
+import { Briefcase, Settings, BarChart3, LogOut, BookOpen, Layers, Library, ClipboardList, LayoutDashboard, Users, CheckSquare, LayoutGrid, Zap, FileBarChart, GanttChartSquare, Mail } from 'lucide-react';
 import { User, UserRole } from '../types';
 
 interface SidebarProps {
@@ -140,6 +140,10 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, 
             <button onClick={() => onTabChange('settings')} className={navItemClass('settings')}>
               <Layers className="w-4 h-4 mr-3" />
               Settings
+            </button>
+            <button onClick={() => onTabChange('pm-mail-center')} className={navItemClass('pm-mail-center')}>
+              <Mail className="w-4 h-4 mr-3" />
+              PM Mail Center
             </button>
           </div>
         )}
