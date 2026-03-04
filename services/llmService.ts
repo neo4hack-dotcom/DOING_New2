@@ -1066,6 +1066,280 @@ Required JSON structure:
     }
 };
 
+export const extractPMReportFromText = async (text: string, config: LLMConfig): Promise<{
+    overallStatus: 'Green' | 'Amber' | 'Red' | '';
+    scopeStatus: 'Green' | 'Amber' | 'Red' | '';
+    scheduleStatus: 'Green' | 'Amber' | 'Red' | '';
+    budgetStatus: 'Green' | 'Amber' | 'Red' | '';
+    resourceStatus: 'Green' | 'Amber' | 'Red' | '';
+    overallCompletionPct: number | null;
+    executiveSummary: string;
+    keyDecisions: string;
+    nextSteps: string;
+    budgetAllocated: number | null;
+    budgetSpent: number | null;
+    budgetForecast: number | null;
+    incidents: {
+        date: string;
+        title: string;
+        description: string;
+        severity: 'Critical' | 'Major' | 'Minor' | '';
+        status: 'Open' | 'Investigating' | 'Resolved' | '';
+    }[];
+    updates: {
+        date: string;
+        category: 'Scope' | 'Timeline' | 'Budget' | 'Resource' | 'Technical' | 'Risk' | 'Other' | '';
+        title: string;
+        description: string;
+        impact: 'Green' | 'Amber' | 'Red' | '';
+    }[];
+    news: {
+        date: string;
+        title: string;
+        description: string;
+        type: 'Achievement' | 'Announcement' | 'Change' | 'Info' | '';
+    }[];
+    milestones: {
+        name: string;
+        plannedDate: string;
+        revisedDate: string;
+        status: 'Green' | 'Amber' | 'Red' | '';
+        completionPct: number | null;
+    }[];
+    risks: {
+        description: string;
+        likelihood: 'Low' | 'Medium' | 'High' | '';
+        impact: 'Low' | 'Medium' | 'High' | '';
+        mitigation: string;
+        owner: string;
+    }[];
+}> => {
+    const today = new Date().toISOString().split('T')[0];
+    const prompt = `
+You are a PM Report Extraction Assistant. Analyze the following text (email, presentation excerpt, notes, or document content) and extract structured data to pre-fill a PM Report form.
+
+TEXT TO ANALYZE:
+${text}
+
+CRITICAL RULES:
+1. Extract ONLY information explicitly present in the text. NEVER invent, guess, infer hidden facts, or hallucinate.
+2. If a field is missing or uncertain, return an empty value:
+   - string fields => ""
+   - numeric fields => null
+   - arrays => []
+3. RAG values must be ONLY "Green", "Amber", or "Red" (otherwise "").
+4. Incident severity must be ONLY "Critical", "Major", or "Minor" (otherwise "").
+5. Incident status must be ONLY "Open", "Investigating", or "Resolved" (otherwise "").
+6. Update category must be one of: "Scope", "Timeline", "Budget", "Resource", "Technical", "Risk", "Other" (otherwise "").
+7. News type must be one of: "Achievement", "Announcement", "Change", "Info" (otherwise "").
+8. Risk likelihood/impact must be ONLY "Low", "Medium", or "High" (otherwise "").
+9. Dates must use YYYY-MM-DD when present, else "".
+10. overallCompletionPct must be a number between 0 and 100, else null.
+11. budgetAllocated / budgetSpent / budgetForecast are man-days (MD). Return numeric values or null.
+12. Today's date is ${today} (use only as reference for relative dates if clearly stated).
+
+RETURN ONLY A VALID JSON OBJECT. NO MARKDOWN. NO CODE BLOCKS. NO EXPLANATION.
+
+Required JSON structure:
+{
+  "overallStatus": "",
+  "scopeStatus": "",
+  "scheduleStatus": "",
+  "budgetStatus": "",
+  "resourceStatus": "",
+  "overallCompletionPct": null,
+  "executiveSummary": "",
+  "keyDecisions": "",
+  "nextSteps": "",
+  "budgetAllocated": null,
+  "budgetSpent": null,
+  "budgetForecast": null,
+  "incidents": [
+    {
+      "date": "",
+      "title": "",
+      "description": "",
+      "severity": "",
+      "status": ""
+    }
+  ],
+  "updates": [
+    {
+      "date": "",
+      "category": "",
+      "title": "",
+      "description": "",
+      "impact": ""
+    }
+  ],
+  "news": [
+    {
+      "date": "",
+      "title": "",
+      "description": "",
+      "type": ""
+    }
+  ],
+  "milestones": [
+    {
+      "name": "",
+      "plannedDate": "",
+      "revisedDate": "",
+      "status": "",
+      "completionPct": null
+    }
+  ],
+  "risks": [
+    {
+      "description": "",
+      "likelihood": "",
+      "impact": "",
+      "mitigation": "",
+      "owner": ""
+    }
+  ]
+}
+`;
+
+    const rawResponse = await runPrompt(prompt, config);
+    const defaultResult = {
+        overallStatus: '' as '' | 'Green' | 'Amber' | 'Red',
+        scopeStatus: '' as '' | 'Green' | 'Amber' | 'Red',
+        scheduleStatus: '' as '' | 'Green' | 'Amber' | 'Red',
+        budgetStatus: '' as '' | 'Green' | 'Amber' | 'Red',
+        resourceStatus: '' as '' | 'Green' | 'Amber' | 'Red',
+        overallCompletionPct: null as number | null,
+        executiveSummary: '',
+        keyDecisions: '',
+        nextSteps: '',
+        budgetAllocated: null as number | null,
+        budgetSpent: null as number | null,
+        budgetForecast: null as number | null,
+        incidents: [] as {
+            date: string;
+            title: string;
+            description: string;
+            severity: 'Critical' | 'Major' | 'Minor' | '';
+            status: 'Open' | 'Investigating' | 'Resolved' | '';
+        }[],
+        updates: [] as {
+            date: string;
+            category: 'Scope' | 'Timeline' | 'Budget' | 'Resource' | 'Technical' | 'Risk' | 'Other' | '';
+            title: string;
+            description: string;
+            impact: 'Green' | 'Amber' | 'Red' | '';
+        }[],
+        news: [] as {
+            date: string;
+            title: string;
+            description: string;
+            type: 'Achievement' | 'Announcement' | 'Change' | 'Info' | '';
+        }[],
+        milestones: [] as {
+            name: string;
+            plannedDate: string;
+            revisedDate: string;
+            status: 'Green' | 'Amber' | 'Red' | '';
+            completionPct: number | null;
+        }[],
+        risks: [] as {
+            description: string;
+            likelihood: 'Low' | 'Medium' | 'High' | '';
+            impact: 'Low' | 'Medium' | 'High' | '';
+            mitigation: string;
+            owner: string;
+        }[],
+    };
+
+    const toString = (value: any): string => typeof value === 'string' ? value : '';
+    const toNumberOrNull = (value: any): number | null => {
+        if (value == null) return null;
+        const n = typeof value === 'number' ? value : parseFloat(String(value).replace(',', '.'));
+        return Number.isFinite(n) ? n : null;
+    };
+    const toRag = (value: any): 'Green' | 'Amber' | 'Red' | '' => {
+        const v = toString(value);
+        return (v === 'Green' || v === 'Amber' || v === 'Red') ? v : '';
+    };
+
+    try {
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+
+        return {
+            overallStatus: toRag(parsed.overallStatus),
+            scopeStatus: toRag(parsed.scopeStatus),
+            scheduleStatus: toRag(parsed.scheduleStatus),
+            budgetStatus: toRag(parsed.budgetStatus),
+            resourceStatus: toRag(parsed.resourceStatus),
+            overallCompletionPct: (() => {
+                const n = toNumberOrNull(parsed.overallCompletionPct);
+                return n == null ? null : Math.max(0, Math.min(100, Math.round(n)));
+            })(),
+            executiveSummary: toString(parsed.executiveSummary),
+            keyDecisions: toString(parsed.keyDecisions),
+            nextSteps: toString(parsed.nextSteps),
+            budgetAllocated: toNumberOrNull(parsed.budgetAllocated),
+            budgetSpent: toNumberOrNull(parsed.budgetSpent),
+            budgetForecast: toNumberOrNull(parsed.budgetForecast),
+            incidents: Array.isArray(parsed.incidents) ? parsed.incidents.map((inc: any) => {
+                const severity = toString(inc?.severity);
+                const status = toString(inc?.status);
+                return {
+                    date: toString(inc?.date),
+                    title: toString(inc?.title),
+                    description: toString(inc?.description),
+                    severity: (severity === 'Critical' || severity === 'Major' || severity === 'Minor') ? severity : '',
+                    status: (status === 'Open' || status === 'Investigating' || status === 'Resolved') ? status : '',
+                };
+            }) : [],
+            updates: Array.isArray(parsed.updates) ? parsed.updates.map((upd: any) => {
+                const category = toString(upd?.category);
+                return {
+                    date: toString(upd?.date),
+                    category: (category === 'Scope' || category === 'Timeline' || category === 'Budget' || category === 'Resource' || category === 'Technical' || category === 'Risk' || category === 'Other') ? category : '',
+                    title: toString(upd?.title),
+                    description: toString(upd?.description),
+                    impact: toRag(upd?.impact),
+                };
+            }) : [],
+            news: Array.isArray(parsed.news) ? parsed.news.map((n: any) => {
+                const type = toString(n?.type);
+                return {
+                    date: toString(n?.date),
+                    title: toString(n?.title),
+                    description: toString(n?.description),
+                    type: (type === 'Achievement' || type === 'Announcement' || type === 'Change' || type === 'Info') ? type : '',
+                };
+            }) : [],
+            milestones: Array.isArray(parsed.milestones) ? parsed.milestones.map((m: any) => ({
+                name: toString(m?.name),
+                plannedDate: toString(m?.plannedDate),
+                revisedDate: toString(m?.revisedDate),
+                status: toRag(m?.status),
+                completionPct: (() => {
+                    const n = toNumberOrNull(m?.completionPct);
+                    return n == null ? null : Math.max(0, Math.min(100, Math.round(n)));
+                })(),
+            })) : [],
+            risks: Array.isArray(parsed.risks) ? parsed.risks.map((r: any) => {
+                const likelihood = toString(r?.likelihood);
+                const impact = toString(r?.impact);
+                return {
+                    description: toString(r?.description),
+                    likelihood: (likelihood === 'Low' || likelihood === 'Medium' || likelihood === 'High') ? likelihood : '',
+                    impact: (impact === 'Low' || impact === 'Medium' || impact === 'High') ? impact : '',
+                    mitigation: toString(r?.mitigation),
+                    owner: toString(r?.owner),
+                };
+            }) : [],
+        };
+    } catch (e) {
+        console.error("Failed to parse PM report extraction JSON", rawResponse);
+        return defaultResult;
+    }
+};
+
 export const ragQuery = async (
     question: string,
     context: string,

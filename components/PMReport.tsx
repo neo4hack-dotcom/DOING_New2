@@ -1,16 +1,18 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   FileBarChart, Plus, Trash2, Save, ChevronDown, AlertTriangle,
   CheckCircle2, TrendingUp, Shield, Megaphone, Target, Calendar,
   DollarSign, Users, Sparkles, Download, Edit3, Eye,
-  CircleDot, Info, ChevronUp, Activity, Copy, History, Tag
+  CircleDot, Info, ChevronUp, Activity, Copy, History, Tag,
+  Bot, Paperclip, Loader2, X, Send
 } from 'lucide-react';
 import {
   Team, User, Project, LLMConfig, PMReportData,
   RAGStatus
 } from '../types';
 import { generateId } from '../services/storage';
+import { extractPMReportFromText } from '../services/llmService';
 
 // ─── Props ───
 interface PMReportProps {
@@ -24,6 +26,7 @@ interface PMReportProps {
 }
 
 type PMView = 'overview' | 'data-entry' | 'report-preview';
+type PMReportExtractionDraft = Awaited<ReturnType<typeof extractPMReportFromText>>;
 
 // ─── RAG helpers ───
 const RAGDot: React.FC<{ status: RAGStatus; size?: 'sm' | 'md' | 'lg' }> = ({ status, size = 'md' }) => {
@@ -88,6 +91,84 @@ const getIncidentRAGStatus = (report: PMReportData): RAGStatus => {
   return 'Green';
 };
 
+const mergeExtractedDataIntoReport = (report: PMReportData, extracted: PMReportExtractionDraft): PMReportData => {
+  const isRAG = (value: string): value is RAGStatus => value === 'Green' || value === 'Amber' || value === 'Red';
+  const clampPct = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+  const next: PMReportData = { ...report };
+
+  if (isRAG(extracted.overallStatus)) next.overallStatus = extracted.overallStatus;
+  if (isRAG(extracted.scopeStatus)) next.scopeStatus = extracted.scopeStatus;
+  if (isRAG(extracted.scheduleStatus)) next.scheduleStatus = extracted.scheduleStatus;
+  if (isRAG(extracted.budgetStatus)) next.budgetStatus = extracted.budgetStatus;
+  if (isRAG(extracted.resourceStatus)) next.resourceStatus = extracted.resourceStatus;
+
+  if (extracted.overallCompletionPct != null) next.overallCompletionPct = clampPct(extracted.overallCompletionPct);
+
+  if (extracted.executiveSummary.trim()) next.executiveSummary = extracted.executiveSummary.trim();
+  if (extracted.keyDecisions.trim()) next.keyDecisions = extracted.keyDecisions.trim();
+  if (extracted.nextSteps.trim()) next.nextSteps = extracted.nextSteps.trim();
+
+  if (extracted.budgetAllocated != null) next.budgetAllocated = extracted.budgetAllocated;
+  if (extracted.budgetSpent != null) next.budgetSpent = extracted.budgetSpent;
+  if (extracted.budgetForecast != null) next.budgetForecast = extracted.budgetForecast;
+
+  if (extracted.incidents.length > 0) {
+    next.incidents = extracted.incidents.map(inc => ({
+      id: generateId(),
+      date: inc.date || '',
+      title: inc.title || '',
+      description: inc.description || '',
+      severity: inc.severity || 'Minor',
+      status: inc.status || 'Open',
+    }));
+  }
+
+  if (extracted.updates.length > 0) {
+    next.updates = extracted.updates.map(upd => ({
+      id: generateId(),
+      date: upd.date || '',
+      category: upd.category || 'Other',
+      title: upd.title || '',
+      description: upd.description || '',
+      impact: isRAG(upd.impact) ? upd.impact : 'Green',
+    }));
+  }
+
+  if (extracted.news.length > 0) {
+    next.news = extracted.news.map(item => ({
+      id: generateId(),
+      date: item.date || '',
+      title: item.title || '',
+      description: item.description || '',
+      type: item.type || 'Info',
+    }));
+  }
+
+  if (extracted.milestones.length > 0) {
+    next.milestones = extracted.milestones.map(m => ({
+      id: generateId(),
+      name: m.name || '',
+      plannedDate: m.plannedDate || '',
+      revisedDate: m.revisedDate || undefined,
+      status: isRAG(m.status) ? m.status : 'Green',
+      completionPct: m.completionPct != null ? clampPct(m.completionPct) : 0,
+    }));
+  }
+
+  if (extracted.risks.length > 0) {
+    next.risks = extracted.risks.map(r => ({
+      id: generateId(),
+      description: r.description || '',
+      likelihood: r.likelihood || 'Medium',
+      impact: r.impact || 'Medium',
+      mitigation: r.mitigation || '',
+      owner: r.owner || '',
+    }));
+  }
+
+  return next;
+};
+
 // ════════════════════════════════════════
 //  FALLBACK HTML GENERATOR (consulting-deck style)
 // ════════════════════════════════════════
@@ -100,46 +181,75 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
     <style>
       .deck{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#1e293b;max-width:1140px;margin:0 auto}
       .deck *{box-sizing:border-box}
-      .deck-header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #4f46e5;padding-bottom:14px;margin-bottom:28px}
-      .deck-header h1{margin:0;font-size:26px;font-weight:800;background:linear-gradient(135deg,#4f46e5,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+      .deck-header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #00915A;padding-bottom:14px;margin-bottom:28px}
+      .deck-header h1{margin:0;font-size:26px;font-weight:800;background:linear-gradient(135deg,#00915A,#00A86B);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
       .deck-header .sub{font-size:12px;color:#64748b;margin-top:4px}
       .deck-header .conf{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
-      .prj-banner{background:linear-gradient(135deg,#4f46e5 0%,#7c3aed 50%,#9333ea 100%);color:#fff;padding:18px 24px;border-radius:14px 14px 0 0;display:flex;justify-content:space-between;align-items:center}
+      .project-block{margin-bottom:24px;page-break-inside:avoid;break-inside:avoid-page}
+      .prj-banner{background:linear-gradient(135deg,#00915A 0%,#00A86B 50%,#007A4C 100%);color:#fff;padding:18px 24px;border-radius:14px 14px 0 0;display:flex;justify-content:space-between;align-items:center}
       .prj-banner h2{margin:0;font-size:20px;font-weight:700;letter-spacing:-0.3px}
       .prj-banner .meta{font-size:11px;opacity:.8;margin-top:3px}
       .prj-banner .pct{font-size:28px;font-weight:800;letter-spacing:-1px}
       .prj-banner .pct-label{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:1px}
-      .prj-body{border:1px solid #e2e8f0;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#fff;margin-bottom:32px}
+      .prj-body{border:1px solid #e2e8f0;border-top:none;border-radius:0 0 14px 14px;padding:24px;background:#fff}
+      .prj-body.compact{padding:18px}
+      .report-section{margin-bottom:18px;page-break-inside:avoid;break-inside:avoid-page}
+      .report-section.allow-split{page-break-inside:auto;break-inside:auto}
+      .report-section:last-child{margin-bottom:0}
       .rag-row{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap}
       .rag-card{flex:1;min-width:100px;text-align:center;padding:14px 8px;border-radius:10px;border:1px solid #e2e8f0;background:#fafbfc}
       .rag-circle{width:24px;height:24px;border-radius:50%;margin:0 auto 8px;box-shadow:0 0 12px rgba(0,0,0,.15)}
       .rag-label{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.7px}
-      .progress-wrap{margin-bottom:22px}
+      .progress-wrap{margin-bottom:0}
       .progress-bar-outer{height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}
-      .progress-bar-inner{height:100%;border-radius:6px;background:linear-gradient(90deg,#4f46e5,#7c3aed);transition:width .3s}
+      .progress-bar-inner{height:100%;border-radius:6px;background:linear-gradient(90deg,#00915A,#00A86B);transition:width .3s}
       .progress-label{display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px}
       .section-title{font-size:14px;font-weight:700;color:#1e293b;margin:0 0 10px;padding-bottom:6px;border-bottom:2px solid #e2e8f0;display:flex;align-items:center;gap:8px}
-      .section-title .dot{width:8px;height:8px;border-radius:50%;background:#4f46e5}
-      .card-summary{padding:14px 18px;border-radius:10px;margin-bottom:18px;font-size:12px;line-height:1.6;color:#334155}
-      .card-blue{background:#eff6ff;border-left:4px solid #4f46e5}
+      .section-title .dot{width:8px;height:8px;border-radius:50%;background:#00915A}
+      .card-summary{padding:14px 18px;border-radius:10px;margin-bottom:0;font-size:12px;line-height:1.6;color:#334155}
+      .card-blue{background:#e9f8f2;border-left:4px solid #00915A}
       .card-green{background:#f0fdf4;border-left:4px solid #10b981}
       .card-amber{background:#fffbeb;border-left:4px solid #f59e0b}
-      .metric-row{display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap}
+      .metric-row{display:flex;gap:14px;margin-bottom:0;flex-wrap:wrap}
       .metric-box{flex:1;min-width:120px;background:#f8fafc;border-radius:10px;padding:14px;border:1px solid #e2e8f0;text-align:center}
       .metric-label{font-size:9px;color:#64748b;text-transform:uppercase;font-weight:700;letter-spacing:.5px}
       .metric-value{font-size:22px;font-weight:800;margin-top:4px}
-      table.deck-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin-bottom:18px;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0}
+      table.deck-table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;margin-bottom:0;border-radius:8px;overflow:hidden;border:1px solid #e2e8f0}
+      table.deck-table thead{display:table-header-group}
       table.deck-table th{background:#f1f5f9;padding:10px 12px;text-align:left;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#475569}
       table.deck-table td{padding:10px 12px;border-top:1px solid #f1f5f9}
+      table.deck-table tr{page-break-inside:avoid;break-inside:avoid-page}
       table.deck-table tr:hover td{background:#fafbfc}
       .severity-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;color:#fff}
       .sev-critical{background:#ef4444}.sev-major{background:#f59e0b}.sev-minor{background:#64748b}
       .status-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
       .likelihood-badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600}
       .update-item{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9}
+      .update-item{page-break-inside:avoid;break-inside:avoid-page}
       .update-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex-shrink:0}
-      .cat-tag{font-size:10px;font-weight:700;padding:1px 7px;border-radius:4px;background:#eef2ff;color:#4f46e5}
+      .cat-tag{font-size:10px;font-weight:700;padding:1px 7px;border-radius:4px;background:#e7f7f0;color:#007A4C}
       .news-type{font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px}
+
+      .prj-body.compact .rag-card{padding:10px 6px}
+      .prj-body.compact .metric-box{padding:10px}
+      .prj-body.compact .metric-value{font-size:18px}
+      .prj-body.compact .section-title{font-size:13px;margin-bottom:8px}
+      .prj-body.compact .card-summary{padding:10px 12px;font-size:11px}
+      .prj-body.compact table.deck-table th{padding:7px 8px;font-size:10px}
+      .prj-body.compact table.deck-table td{padding:7px 8px;font-size:11px}
+      .prj-body.compact .update-item{padding:6px 0}
+
+      @media print {
+        .deck{max-width:none}
+        .deck-header{margin-bottom:16px}
+        .project-block{margin-bottom:16px;page-break-inside:avoid;break-inside:avoid-page}
+        .prj-banner{padding:12px 16px}
+        .prj-banner .pct{font-size:24px}
+        .prj-body{padding:16px}
+        .report-section{margin-bottom:12px;page-break-inside:avoid;break-inside:avoid-page}
+        .report-section.allow-split{page-break-inside:auto;break-inside:auto}
+        .prj-body.compact{padding:14px;font-size:11px}
+      }
     </style>`;
 
   const projectBlocks = data.map(({ project, report }) => {
@@ -154,8 +264,11 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       { label: 'Incident', status: incidentStatus },
     ];
 
+    const densityScore = report.milestones.length + report.incidents.length + report.risks.length + report.updates.length + report.news.length;
+    const isCompact = densityScore > 16 || report.executiveSummary.length > 420 || report.keyDecisions.length > 320 || report.nextSteps.length > 320;
+
     return `
-    <div style="page-break-inside:avoid;">
+    <div class="project-block">
       <div class="prj-banner">
         <div>
           <h2>${project.name}</h2>
@@ -166,103 +279,123 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
           <div class="pct-label">Complete</div>
         </div>
       </div>
-      <div class="prj-body">
-        <!-- RAG STATUS -->
-        <div class="rag-row">
-          ${ragIndicators.map(({ label, status }) => {
-            return `<div class="rag-card" style="background:${rcBg(status)}">
-              <div class="rag-circle" style="background:${rc(status)}"></div>
-              <div class="rag-label">${label}</div>
-            </div>`;
-          }).join('')}
-        </div>
-
-        <!-- EXECUTIVE SUMMARY -->
-        <div class="card-summary card-blue"><strong style="color:#1e40af">Executive Summary</strong><br/>${report.executiveSummary || 'No executive summary provided.'}</div>
-
-        <!-- PROGRESS BAR -->
-        <div class="progress-wrap">
-          <div class="progress-label"><span>Overall Progress</span><span style="color:#4f46e5">${report.overallCompletionPct}%</span></div>
-          <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${report.overallCompletionPct}%"></div></div>
-        </div>
-
-        <!-- BUDGET METRICS -->
-        ${(report.budgetAllocated || 0) > 0 ? `
-        <div class="section-title"><div class="dot"></div>Cost Overview (MD)</div>
-        <div class="metric-row">
-          <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">${formatMD(report.budgetAllocated || 0)}</div></div>
-          <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">${formatMD(report.budgetSpent || 0)}</div></div>
-          <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${(report.budgetForecast || 0) > (report.budgetAllocated || 0) ? '#ef4444' : '#10b981'}">${formatMD(report.budgetForecast || 0)}</div></div>
-          <div class="metric-box"><div class="metric-label">Utilization</div>
-            <div class="metric-value" style="color:${budgetPct > 90 ? '#ef4444' : budgetPct > 70 ? '#f59e0b' : '#10b981'}">${budgetPct}%</div>
+      <div class="prj-body ${isCompact ? 'compact' : ''}">
+        <section class="report-section">
+          <div class="rag-row">
+            ${ragIndicators.map(({ label, status }) => {
+              return `<div class="rag-card" style="background:${rcBg(status)}">
+                <div class="rag-circle" style="background:${rc(status)}"></div>
+                <div class="rag-label">${label}</div>
+              </div>`;
+            }).join('')}
           </div>
-        </div>` : ''}
+        </section>
 
-        <!-- MILESTONES -->
+        <section class="report-section">
+          <div class="card-summary card-blue"><strong style="color:#006B46">Executive Summary</strong><br/>${report.executiveSummary || 'No executive summary provided.'}</div>
+        </section>
+
+        <section class="report-section">
+          <div class="progress-wrap">
+            <div class="progress-label"><span>Overall Progress</span><span style="color:#00915A">${report.overallCompletionPct}%</span></div>
+            <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${report.overallCompletionPct}%"></div></div>
+          </div>
+        </section>
+
+        ${(report.budgetAllocated || 0) > 0 ? `
+        <section class="report-section">
+          <div class="section-title"><div class="dot"></div>Cost Overview (MD)</div>
+          <div class="metric-row">
+            <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">${formatMD(report.budgetAllocated || 0)}</div></div>
+            <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">${formatMD(report.budgetSpent || 0)}</div></div>
+            <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${(report.budgetForecast || 0) > (report.budgetAllocated || 0) ? '#ef4444' : '#10b981'}">${formatMD(report.budgetForecast || 0)}</div></div>
+            <div class="metric-box"><div class="metric-label">Utilization</div>
+              <div class="metric-value" style="color:${budgetPct > 90 ? '#ef4444' : budgetPct > 70 ? '#f59e0b' : '#10b981'}">${budgetPct}%</div>
+            </div>
+          </div>
+        </section>` : ''}
+
         ${report.milestones.length > 0 ? `
-        <div class="section-title"><div class="dot"></div>Milestone Tracker</div>
-        <table class="deck-table">
-          <tr><th>Milestone</th><th style="text-align:center">Planned</th><th style="text-align:center">Revised</th><th style="text-align:center">Status</th><th style="text-align:center;width:160px">Progress</th></tr>
-          ${report.milestones.map(m => `<tr>
-            <td style="font-weight:600">${m.name}</td>
-            <td style="text-align:center;font-size:11px">${m.plannedDate}</td>
-            <td style="text-align:center;font-size:11px;${m.revisedDate && m.revisedDate > m.plannedDate ? 'color:#ef4444;font-weight:700' : ''}">${m.revisedDate || '—'}</td>
-            <td style="text-align:center"><div style="width:14px;height:14px;border-radius:50%;background:${rc(m.status)};margin:0 auto;box-shadow:0 0 6px ${rc(m.status)}40"></div></td>
-            <td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden"><div style="height:100%;width:${m.completionPct}%;background:linear-gradient(90deg,#4f46e5,#7c3aed);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:#4f46e5;min-width:32px;text-align:right">${m.completionPct}%</span></div></td>
-          </tr>`).join('')}
-        </table>` : ''}
+        <section class="report-section allow-split">
+          <div class="section-title"><div class="dot"></div>Milestone Tracker</div>
+          <table class="deck-table">
+            <thead>
+              <tr><th>Milestone</th><th style="text-align:center">Planned</th><th style="text-align:center">Revised</th><th style="text-align:center">Status</th><th style="text-align:center;width:160px">Progress</th></tr>
+            </thead>
+            <tbody>
+              ${report.milestones.map(m => `<tr>
+                <td style="font-weight:600">${m.name}</td>
+                <td style="text-align:center;font-size:11px">${m.plannedDate}</td>
+                <td style="text-align:center;font-size:11px;${m.revisedDate && m.revisedDate > m.plannedDate ? 'color:#ef4444;font-weight:700' : ''}">${m.revisedDate || '—'}</td>
+                <td style="text-align:center"><div style="width:14px;height:14px;border-radius:50%;background:${rc(m.status)};margin:0 auto;box-shadow:0 0 6px ${rc(m.status)}40"></div></td>
+                <td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden"><div style="height:100%;width:${m.completionPct}%;background:linear-gradient(90deg,#00915A,#00A86B);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:#00915A;min-width:32px;text-align:right">${m.completionPct}%</span></div></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>` : ''}
 
-        <!-- INCIDENTS -->
         ${report.incidents.length > 0 ? `
-        <div class="section-title"><div class="dot" style="background:#ef4444"></div>Incidents</div>
-        <table class="deck-table">
-          <tr><th style="width:80px">Severity</th><th>Incident</th><th style="width:200px">Description</th><th style="width:90px">Status</th><th style="width:90px">Date</th></tr>
-          ${report.incidents.map(inc => `<tr>
-            <td><span class="severity-badge sev-${inc.severity.toLowerCase()}">${inc.severity}</span></td>
-            <td style="font-weight:600">${inc.title}</td>
-            <td style="font-size:11px;color:#64748b">${inc.description}</td>
-            <td><span class="status-badge" style="background:${inc.status === 'Resolved' ? '#d1fae5' : inc.status === 'Investigating' ? '#fef3c7' : '#fee2e2'};color:${inc.status === 'Resolved' ? '#065f46' : inc.status === 'Investigating' ? '#92400e' : '#991b1b'}">${inc.status}</span></td>
-            <td style="font-size:11px;color:#64748b">${inc.date}</td>
-          </tr>`).join('')}
-        </table>` : ''}
+        <section class="report-section allow-split">
+          <div class="section-title"><div class="dot" style="background:#ef4444"></div>Incidents</div>
+          <table class="deck-table">
+            <thead>
+              <tr><th style="width:80px">Severity</th><th>Incident</th><th style="width:200px">Description</th><th style="width:90px">Status</th><th style="width:90px">Date</th></tr>
+            </thead>
+            <tbody>
+              ${report.incidents.map(inc => `<tr>
+                <td><span class="severity-badge sev-${inc.severity.toLowerCase()}">${inc.severity}</span></td>
+                <td style="font-weight:600">${inc.title}</td>
+                <td style="font-size:11px;color:#64748b">${inc.description}</td>
+                <td><span class="status-badge" style="background:${inc.status === 'Resolved' ? '#d1fae5' : inc.status === 'Investigating' ? '#fef3c7' : '#fee2e2'};color:${inc.status === 'Resolved' ? '#065f46' : inc.status === 'Investigating' ? '#92400e' : '#991b1b'}">${inc.status}</span></td>
+                <td style="font-size:11px;color:#64748b">${inc.date}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>` : ''}
 
-        <!-- RISKS -->
         ${report.risks.length > 0 ? `
-        <div class="section-title"><div class="dot" style="background:#f59e0b"></div>Risk Register</div>
-        <table class="deck-table">
-          <tr><th>Risk</th><th style="width:85px;text-align:center">Likelihood</th><th style="width:85px;text-align:center">Impact</th><th>Mitigation</th><th style="width:90px">Owner</th></tr>
-          ${report.risks.map(r => `<tr>
-            <td style="font-weight:600">${r.description}</td>
-            <td style="text-align:center"><span class="likelihood-badge" style="background:${r.likelihood === 'High' ? '#fee2e2' : r.likelihood === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.likelihood === 'High' ? '#991b1b' : r.likelihood === 'Medium' ? '#92400e' : '#065f46'}">${r.likelihood}</span></td>
-            <td style="text-align:center"><span class="likelihood-badge" style="background:${r.impact === 'High' ? '#fee2e2' : r.impact === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.impact === 'High' ? '#991b1b' : r.impact === 'Medium' ? '#92400e' : '#065f46'}">${r.impact}</span></td>
-            <td style="font-size:11px;color:#475569">${r.mitigation}</td>
-            <td style="font-size:11px;font-weight:600">${r.owner}</td>
-          </tr>`).join('')}
-        </table>` : ''}
+        <section class="report-section allow-split">
+          <div class="section-title"><div class="dot" style="background:#f59e0b"></div>Risk Register</div>
+          <table class="deck-table">
+            <thead>
+              <tr><th>Risk</th><th style="width:85px;text-align:center">Likelihood</th><th style="width:85px;text-align:center">Impact</th><th>Mitigation</th><th style="width:90px">Owner</th></tr>
+            </thead>
+            <tbody>
+              ${report.risks.map(r => `<tr>
+                <td style="font-weight:600">${r.description}</td>
+                <td style="text-align:center"><span class="likelihood-badge" style="background:${r.likelihood === 'High' ? '#fee2e2' : r.likelihood === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.likelihood === 'High' ? '#991b1b' : r.likelihood === 'Medium' ? '#92400e' : '#065f46'}">${r.likelihood}</span></td>
+                <td style="text-align:center"><span class="likelihood-badge" style="background:${r.impact === 'High' ? '#fee2e2' : r.impact === 'Medium' ? '#fef3c7' : '#d1fae5'};color:${r.impact === 'High' ? '#991b1b' : r.impact === 'Medium' ? '#92400e' : '#065f46'}">${r.impact}</span></td>
+                <td style="font-size:11px;color:#475569">${r.mitigation}</td>
+                <td style="font-size:11px;font-weight:600">${r.owner}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </section>` : ''}
 
-        <!-- UPDATES -->
         ${report.updates.length > 0 ? `
-        <div class="section-title"><div class="dot" style="background:#3b82f6"></div>Key Updates</div>
-        <div style="margin-bottom:18px">
-          ${report.updates.map(u => `<div class="update-item">
-            <div class="update-dot" style="background:${rc(u.impact)}"></div>
-            <div><span class="cat-tag">${u.category}</span> <span style="font-size:12px;font-weight:600;margin-left:4px">${u.title}</span><div style="font-size:11px;color:#64748b;margin-top:3px">${u.description}</div></div>
-          </div>`).join('')}
-        </div>` : ''}
+        <section class="report-section allow-split">
+          <div class="section-title"><div class="dot" style="background:#3b82f6"></div>Key Updates</div>
+          <div>
+            ${report.updates.map(u => `<div class="update-item">
+              <div class="update-dot" style="background:${rc(u.impact)}"></div>
+              <div><span class="cat-tag">${u.category}</span> <span style="font-size:12px;font-weight:600;margin-left:4px">${u.title}</span><div style="font-size:11px;color:#64748b;margin-top:3px">${u.description}</div></div>
+            </div>`).join('')}
+          </div>
+        </section>` : ''}
 
-        <!-- NEWS -->
         ${report.news.length > 0 ? `
-        <div class="section-title"><div class="dot" style="background:#10b981"></div>News & Achievements</div>
-        <div style="margin-bottom:18px">
-          ${report.news.map(n => `<div class="update-item">
-            <span class="news-type" style="background:${n.type === 'Achievement' ? '#d1fae5' : n.type === 'Change' ? '#fef3c7' : '#e0e7ff'};color:${n.type === 'Achievement' ? '#065f46' : n.type === 'Change' ? '#92400e' : '#3730a3'}">${n.type}</span>
-            <div><div style="font-size:12px;font-weight:600">${n.title}</div><div style="font-size:11px;color:#64748b;margin-top:2px">${n.description}</div></div>
-          </div>`).join('')}
-        </div>` : ''}
+        <section class="report-section allow-split">
+          <div class="section-title"><div class="dot" style="background:#10b981"></div>News & Achievements</div>
+          <div>
+            ${report.news.map(n => `<div class="update-item">
+              <span class="news-type" style="background:${n.type === 'Achievement' ? '#d1fae5' : n.type === 'Change' ? '#fef3c7' : '#e0e7ff'};color:${n.type === 'Achievement' ? '#065f46' : n.type === 'Change' ? '#92400e' : '#3730a3'}">${n.type}</span>
+              <div><div style="font-size:12px;font-weight:600">${n.title}</div><div style="font-size:11px;color:#64748b;margin-top:2px">${n.description}</div></div>
+            </div>`).join('')}
+          </div>
+        </section>` : ''}
 
-        <!-- KEY DECISIONS & NEXT STEPS -->
-        ${report.keyDecisions ? `<div class="card-summary card-amber"><strong style="color:#92400e">Key Decisions</strong><br/>${report.keyDecisions}</div>` : ''}
-        ${report.nextSteps ? `<div class="card-summary card-green"><strong style="color:#065f46">Next Steps</strong><br/>${report.nextSteps}</div>` : ''}
+        ${report.keyDecisions ? `<section class="report-section"><div class="card-summary card-amber"><strong style="color:#92400e">Key Decisions</strong><br/>${report.keyDecisions}</div></section>` : ''}
+        ${report.nextSteps ? `<section class="report-section"><div class="card-summary card-green"><strong style="color:#065f46">Next Steps</strong><br/>${report.nextSteps}</div></section>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -274,6 +407,322 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
     </div>
     ${projectBlocks}
   </div>`;
+};
+
+interface AIPMReportModalProps {
+  llmConfig: LLMConfig;
+  onClose: () => void;
+  onApply: (extracted: PMReportExtractionDraft) => void;
+}
+
+interface AIPMReportChatMessage {
+  id: string;
+  role: 'assistant' | 'user';
+  content: string;
+}
+
+const AIPMReportModal: React.FC<AIPMReportModalProps> = ({ llmConfig, onClose, onApply }) => {
+  const [messages, setMessages] = useState<AIPMReportChatMessage[]>([
+    {
+      id: generateId(),
+      role: 'assistant',
+      content: 'Paste a paragraph (email, presentation excerpt, notes) or attach a text document. I will extract PM Report fields without inventing missing information.'
+    }
+  ]);
+  const [inputText, setInputText] = useState('');
+  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [extracted, setExtracted] = useState<PMReportExtractionDraft | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isExtracting]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  const pushMessage = (role: 'assistant' | 'user', content: string) => {
+    setMessages(prev => [...prev, { id: generateId(), role, content }]);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        setAttachedFile({ name: file.name, content: String(evt.target?.result || '') });
+      };
+      reader.readAsText(file);
+    }
+    e.target.value = '';
+  };
+
+  const handleExtract = async () => {
+    const messageText = inputText.trim();
+    const combined = [
+      messageText,
+      attachedFile ? `\n\n[Attached file: ${attachedFile.name}]\n${attachedFile.content}` : ''
+    ].join('').trim();
+
+    if (!combined) {
+      setExtractError('Please write a message or attach a document before extraction.');
+      return;
+    }
+
+    pushMessage(
+      'user',
+      [
+        messageText || '(No free-text prompt)',
+        attachedFile ? `Attachment: ${attachedFile.name}` : ''
+      ].filter(Boolean).join('\n')
+    );
+
+    setInputText('');
+    setAttachedFile(null);
+    setExtractError(null);
+    setIsExtracting(true);
+
+    try {
+      const result = await extractPMReportFromText(combined, llmConfig);
+      setExtracted(result);
+
+      const hasData =
+        Boolean(result.executiveSummary.trim()) ||
+        Boolean(result.keyDecisions.trim()) ||
+        Boolean(result.nextSteps.trim()) ||
+        result.overallCompletionPct != null ||
+        result.budgetAllocated != null ||
+        result.budgetSpent != null ||
+        result.budgetForecast != null ||
+        result.incidents.length > 0 ||
+        result.updates.length > 0 ||
+        result.news.length > 0 ||
+        result.milestones.length > 0 ||
+        result.risks.length > 0;
+
+      pushMessage(
+        'assistant',
+        hasData
+          ? 'Extraction completed. Review the extracted PM report mask on the right, then apply it to the standard PM Report editor.'
+          : 'Extraction completed, but not enough explicit information was found. Fields are left blank as requested.'
+      );
+    } catch (e: any) {
+      const err = e?.message || 'Extraction failed';
+      setExtractError(err);
+      pushMessage('assistant', `Extraction failed: ${err}`);
+    } finally {
+      setIsExtracting(false);
+    }
+  };
+
+  const ragItems: Array<{ label: string; value: PMReportExtractionDraft['overallStatus'] }> = extracted ? [
+    { label: 'Overall', value: extracted.overallStatus },
+    { label: 'Scope', value: extracted.scopeStatus },
+    { label: 'Schedule', value: extracted.scheduleStatus },
+    { label: 'Budget', value: extracted.budgetStatus },
+    { label: 'Resource', value: extracted.resourceStatus },
+  ] : [];
+
+  const renderRAGValue = (value: string) => {
+    if (value === 'Green' || value === 'Amber' || value === 'Red') {
+      return (
+        <div className="flex items-center gap-2">
+          <RAGDot status={value} size="sm" />
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-200">{value}</span>
+        </div>
+      );
+    }
+    return <span className="text-xs text-gray-400">Not provided</span>;
+  };
+
+  const asLine = (label: string, value: string | number | null | undefined) => (
+    <div className="flex items-start justify-between gap-3">
+      <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">{label}</span>
+      <span className="text-xs text-right text-gray-700 dark:text-gray-200">{value == null || value === '' ? 'Not provided' : value}</span>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm p-4 flex items-center justify-center" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl w-full max-w-7xl h-[90vh] overflow-hidden flex flex-col lg:flex-row" onClick={e => e.stopPropagation()}>
+        <div className="w-full lg:w-[45%] flex-1 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-800 flex flex-col min-h-0">
+          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+                <Bot className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900 dark:text-white">AI PM Report</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Chat + extraction to PM report template</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/60 dark:bg-gray-950/40">
+            {messages.map(msg => (
+              <div
+                key={msg.id}
+                className={`max-w-[90%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
+                  msg.role === 'assistant'
+                    ? 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200'
+                    : 'ml-auto bg-indigo-600 text-white'
+                }`}
+              >
+                {msg.content}
+              </div>
+            ))}
+            {isExtracting && (
+              <div className="max-w-[90%] rounded-xl px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                Extracting PM report fields...
+              </div>
+            )}
+            <div ref={endRef} />
+          </div>
+
+          <div className="p-4 border-t border-gray-200 dark:border-gray-800 space-y-3 shrink-0">
+            {extractError && (
+              <div className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
+                {extractError}
+              </div>
+            )}
+
+            <textarea
+              value={inputText}
+              onChange={e => setInputText(e.target.value)}
+              rows={4}
+              className="w-full p-3 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              placeholder="Describe the subject to analyze (email, presentation, project notes...)"
+            />
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileSelect}
+              accept=".txt,.md,.csv,.json,.xml,.html,.log"
+            />
+
+            <div className="flex items-center justify-between gap-3">
+              {attachedFile ? (
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{attachedFile.name}</span>
+                  <button onClick={() => setAttachedFile(null)} className="text-red-500 hover:text-red-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold border border-dashed border-gray-300 dark:border-gray-700 rounded-lg text-gray-600 dark:text-gray-300 hover:border-indigo-400 hover:text-indigo-600 transition-colors"
+                >
+                  <Paperclip className="w-3.5 h-3.5" />
+                  Attach document
+                </button>
+              )}
+
+              <button
+                onClick={handleExtract}
+                disabled={isExtracting || (!inputText.trim() && !attachedFile)}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg transition-colors"
+              >
+                <Send className="w-3.5 h-3.5" />
+                Extract
+              </button>
+            </div>
+
+            {extracted && (
+              <button
+                onClick={() => onApply(extracted)}
+                className="w-full px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors"
+              >
+                Apply Extracted Mask to Editor
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="w-full lg:w-[55%] flex-1 flex flex-col min-h-0">
+          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between shrink-0">
+            <div>
+              <h4 className="font-bold text-gray-900 dark:text-white">Extracted PM Mask</h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Review before injecting into the standard PM report editor</p>
+            </div>
+            <button
+              onClick={() => extracted && onApply(extracted)}
+              disabled={!extracted}
+              className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-lg transition-colors"
+            >
+              Apply to Editor
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            {!extracted && (
+              <div className="h-full flex items-center justify-center text-center text-sm text-gray-400 dark:text-gray-500">
+                Run an extraction from the chat panel to preview the AI-generated PM report mask.
+              </div>
+            )}
+
+            {extracted && (
+              <>
+                <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+                  <h5 className="text-xs font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">RAG</h5>
+                  <div className="grid grid-cols-2 gap-3">
+                    {ragItems.map(item => (
+                      <div key={item.label} className="flex items-center justify-between border border-gray-100 dark:border-gray-800 rounded-lg px-3 py-2">
+                        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">{item.label}</span>
+                        {renderRAGValue(item.value)}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3">{asLine('Completion', extracted.overallCompletionPct != null ? `${extracted.overallCompletionPct}%` : null)}</div>
+                </div>
+
+                <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
+                  <h5 className="text-xs font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">Summary</h5>
+                  {asLine('Executive Summary', extracted.executiveSummary || null)}
+                  {asLine('Key Decisions', extracted.keyDecisions || null)}
+                  {asLine('Next Steps', extracted.nextSteps || null)}
+                </div>
+
+                <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
+                  <h5 className="text-xs font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">Cost (MD)</h5>
+                  {asLine('Allocated', extracted.budgetAllocated)}
+                  {asLine('Spent', extracted.budgetSpent)}
+                  {asLine('Forecast', extracted.budgetForecast)}
+                </div>
+
+                <div className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
+                  <h5 className="text-xs font-bold uppercase tracking-wide text-gray-500 dark:text-gray-400">Extracted Items</h5>
+                  {asLine('Incidents', extracted.incidents.length)}
+                  {asLine('Updates', extracted.updates.length)}
+                  {asLine('News', extracted.news.length)}
+                  {asLine('Milestones', extracted.milestones.length)}
+                  {asLine('Risks', extracted.risks.length)}
+                </div>
+
+                <div className="text-xs text-gray-500 dark:text-gray-400 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800/60 rounded-lg p-3">
+                  After applying, you can amend all fields in the standard PM Report edit form before saving.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // ════════════════════════════════════════
@@ -291,6 +740,7 @@ const PMReport: React.FC<PMReportProps> = ({
     rag: true, summary: true, incidents: true, updates: true, news: true, milestones: true, risks: true, budget: true
   });
   const [versionPanelProject, setVersionPanelProject] = useState<string | null>(null);
+  const [showAIPMModal, setShowAIPMModal] = useState(false);
 
   const allProjects = useMemo(() => {
     const projects: (Project & { teamName: string })[] = [];
@@ -320,6 +770,7 @@ const PMReport: React.FC<PMReportProps> = ({
   const handleEditVersion = (report: PMReportData) => {
     setEditingReport({ ...report });
     setVersionPanelProject(null);
+    setShowAIPMModal(false);
     setView('data-entry');
   };
 
@@ -332,6 +783,7 @@ const PMReport: React.FC<PMReportProps> = ({
       : createEmptyReport(projectId, currentUser.id, newVersion);
     setEditingReport(newReport);
     setVersionPanelProject(null);
+    setShowAIPMModal(false);
     setView('data-entry');
   };
 
@@ -352,6 +804,7 @@ const PMReport: React.FC<PMReportProps> = ({
     if (!toSave.versionLabel) toSave.versionLabel = `v${toSave.version}`;
     onSavePMReport(toSave);
     setView('overview');
+    setShowAIPMModal(false);
     setEditingReport(null);
   };
 
@@ -395,10 +848,10 @@ const PMReport: React.FC<PMReportProps> = ({
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>PM Status Report</title>
-<style>@page{size:landscape;margin:12mm}@media print{body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}.no-print{display:none!important}}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#1e293b;background:#fff;padding:20px;font-size:12px}</style>
+<style>@page{size:landscape;margin:9mm}@media print{body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;font-size:11.5px;line-height:1.35}.no-print{display:none!important}.deck{max-width:none}.project-block,.report-section,.rag-card,.metric-box,.update-item{break-inside:avoid-page;page-break-inside:avoid}table,tr,th,td{break-inside:avoid-page;page-break-inside:avoid}thead{display:table-header-group}}*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;color:#1e293b;background:#fff;padding:20px;font-size:12px}</style>
 </head><body>
 <div class="no-print" style="text-align:center;margin-bottom:24px;padding:16px;background:#f8fafc;border-radius:12px;border:1px solid #e2e8f0">
-  <button onclick="window.print()" style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border:none;padding:14px 40px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,.3)">Print / Save as PDF</button>
+  <button onclick="window.print()" style="background:linear-gradient(135deg,#00915A,#00A86B);color:#fff;border:none;padding:14px 40px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,145,90,.3)">Print / Save as PDF</button>
   <button onclick="window.close()" style="margin-left:14px;background:#fff;color:#374151;border:1px solid #d1d5db;padding:14px 28px;border-radius:10px;font-size:15px;cursor:pointer">Cancel</button>
   <p style="margin-top:10px;font-size:12px;color:#64748b">Use your browser's print dialog to save as PDF in landscape orientation</p>
 </div>${generatedHTML}</body></html>`);
@@ -440,7 +893,10 @@ const PMReport: React.FC<PMReportProps> = ({
             </div>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => { setView('overview'); setEditingReport(null); }} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
+            <button onClick={() => setShowAIPMModal(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors">
+              <Bot className="w-4 h-4" /> AI PM Report
+            </button>
+            <button onClick={() => { setView('overview'); setEditingReport(null); setShowAIPMModal(false); }} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Cancel</button>
             <button onClick={handleSave} className="flex items-center gap-2 px-5 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm">
               <Save className="w-4 h-4" /> Save
             </button>
@@ -790,6 +1246,16 @@ const PMReport: React.FC<PMReportProps> = ({
       {view === 'data-entry' && renderDataEntry()}
       {view === 'report-preview' && renderReportPreview()}
       {versionPanelProject && renderVersionPanel(versionPanelProject)}
+      {showAIPMModal && view === 'data-entry' && editingReport && (
+        <AIPMReportModal
+          llmConfig={llmConfig}
+          onClose={() => setShowAIPMModal(false)}
+          onApply={(extracted) => {
+            setEditingReport(current => current ? mergeExtractedDataIntoReport(current, extracted) : current);
+            setShowAIPMModal(false);
+          }}
+        />
+      )}
     </div>
   );
 };
