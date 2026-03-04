@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
   CheckCircle2,
@@ -10,6 +10,7 @@ import {
   Link2,
   Mail,
   Plus,
+  Search,
   Save,
   Sparkles,
   Star,
@@ -461,7 +462,9 @@ const PMGant: React.FC<PMGantProps> = ({
   const [aiInput, setAiInput] = useState('');
   const [aiError, setAiError] = useState('');
   const [aiInfo, setAiInfo] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const didAutoSelectInitialProject = useRef(false);
 
   const allProjects = useMemo<PMGantProject[]>(() => {
     const list: PMGantProject[] = [];
@@ -491,12 +494,13 @@ const PMGant: React.FC<PMGantProps> = ({
   }, [projectById]);
 
   useEffect(() => {
-    if (selectedProjectIds.length === 0 && allProjects.length > 0) {
+    if (!didAutoSelectInitialProject.current && selectedProjectIds.length === 0 && allProjects.length > 0) {
       setSelectedProjectIds([allProjects[0].id]);
+      didAutoSelectInitialProject.current = true;
     }
   }, [allProjects, selectedProjectIds.length]);
 
-  const defaultProjectId = selectedProjectIds[0] || allProjects[0]?.id || '';
+  const defaultProjectId = selectedProjectIds[0] || '';
   const [form, setForm] = useState<PMGantFormState>({
     projectId: defaultProjectId,
     title: '',
@@ -514,14 +518,41 @@ const PMGant: React.FC<PMGantProps> = ({
   });
 
   useEffect(() => {
-    if (!form.projectId && defaultProjectId) {
-      setForm(prev => ({ ...prev, projectId: defaultProjectId }));
-    }
-  }, [defaultProjectId, form.projectId]);
+    setForm(prev => {
+      if (selectedProjectIds.length === 0) {
+        if (!prev.projectId && prev.dependsOnIds.length === 0) return prev;
+        return { ...prev, projectId: '', dependsOnIds: [] };
+      }
+
+      if (selectedProjectIds.length === 1) {
+        const onlyProjectId = selectedProjectIds[0];
+        if (prev.projectId === onlyProjectId) return prev;
+        return { ...prev, projectId: onlyProjectId, dependsOnIds: [] };
+      }
+
+      if (prev.projectId && selectedProjectIds.includes(prev.projectId)) return prev;
+      return { ...prev, projectId: selectedProjectIds[0], dependsOnIds: [] };
+    });
+  }, [selectedProjectIds]);
 
   const selectedProjects = useMemo(() => {
     return allProjects.filter(project => selectedProjectIds.includes(project.id));
   }, [allProjects, selectedProjectIds]);
+
+  const filteredProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+    if (!query) return allProjects;
+    return allProjects.filter(project => {
+      const name = project.name.toLowerCase();
+      const team = (project.teamName || '').toLowerCase();
+      const status = (project.status || '').toLowerCase();
+      return name.includes(query) || team.includes(query) || status.includes(query);
+    });
+  }, [allProjects, projectSearch]);
+
+  const canUseForm = selectedProjects.length > 0;
+  const hasSingleSelectedProject = selectedProjects.length === 1;
+  const activeFormProjectId = form.projectId || (hasSingleSelectedProject ? selectedProjects[0].id : '');
 
   const selectedItems = useMemo(() => {
     return gantItems
@@ -536,14 +567,14 @@ const PMGant: React.FC<PMGantProps> = ({
 
   const dependencyOptions = useMemo(() => {
     return gantItems
-      .filter(item => item.projectId === form.projectId && item.id !== editingItemId)
+      .filter(item => item.projectId === activeFormProjectId && item.id !== editingItemId)
       .sort((a, b) => {
         const aStart = parseDate(a.startDate)?.getTime() || 0;
         const bStart = parseDate(b.startDate)?.getTime() || 0;
         if (aStart !== bStart) return aStart - bStart;
         return a.title.localeCompare(b.title);
       });
-  }, [gantItems, form.projectId, editingItemId]);
+  }, [gantItems, activeFormProjectId, editingItemId]);
 
   useEffect(() => {
     setForm(prev => {
@@ -652,7 +683,11 @@ const PMGant: React.FC<PMGantProps> = ({
     );
   };
 
-  const handleSelectAll = () => setSelectedProjectIds(allProjects.map(project => project.id));
+  const handleSelectAll = () => {
+    if (filteredProjects.length === 0) return;
+    const filteredIds = new Set(filteredProjects.map(project => project.id));
+    setSelectedProjectIds(prev => Array.from(new Set([...prev, ...filteredIds])));
+  };
   const handleClearSelection = () => setSelectedProjectIds([]);
 
   const toggleDependency = (dependencyId: string) => {
@@ -693,7 +728,9 @@ const PMGant: React.FC<PMGantProps> = ({
   };
 
   const handleSaveRoadmapItem = () => {
-    if (!form.projectId) return alert('Please select a project.');
+    const projectId = activeFormProjectId;
+    if (!projectId) return alert('Please select at least one project in Step 1.');
+    if (!selectedProjectIds.includes(projectId)) return alert('Selected form project is outside Step 1 selection.');
     if (!form.title.trim()) return alert('Roadmap item title is required.');
     if (!form.startDate || !form.endDate) return alert('Start and end dates are required.');
 
@@ -705,7 +742,7 @@ const PMGant: React.FC<PMGantProps> = ({
     const sanitizedDependsOnIds = Array.from(new Set(
       form.dependsOnIds.filter(depId =>
         depId !== editingItemId &&
-        gantItems.some(item => item.projectId === form.projectId && item.id === depId)
+        gantItems.some(item => item.projectId === projectId && item.id === depId)
       )
     ));
 
@@ -713,7 +750,7 @@ const PMGant: React.FC<PMGantProps> = ({
     const existing = editingItemId ? gantItems.find(item => item.id === editingItemId) : null;
     const nextItem: PMGanttItem = {
       id: editingItemId || generateId(),
-      projectId: form.projectId,
+      projectId,
       createdByUserId: existing?.createdByUserId || currentUser.id,
       createdAt: existing?.createdAt || now,
       updatedAt: now,
@@ -747,7 +784,7 @@ const PMGant: React.FC<PMGantProps> = ({
       const extracted = await extractPMGanttItemFromText(aiInput, llmConfig);
       setForm(prev => ({
         ...prev,
-        projectId: prev.projectId || defaultProjectId,
+        projectId: prev.projectId || selectedProjectIds[0] || '',
         title: extracted.title || prev.title,
         description: extracted.description || prev.description,
         owner: extracted.owner || prev.owner,
@@ -777,7 +814,7 @@ const PMGant: React.FC<PMGantProps> = ({
   };
 
   const handleAICreateMilestonesFromText = async () => {
-    const projectId = form.projectId || defaultProjectId;
+    const projectId = activeFormProjectId;
     if (!projectId) {
       setAiError('Select a project before creating milestones from text.');
       return;
@@ -820,7 +857,7 @@ const PMGant: React.FC<PMGantProps> = ({
   };
 
   const handleAIGenerateFromProjectData = async () => {
-    const projectId = form.projectId || defaultProjectId;
+    const projectId = activeFormProjectId;
     if (!projectId) {
       setAiError('Select a project first.');
       return;
@@ -1042,8 +1079,18 @@ ${generatedHTML}</body></html>`;
               <button onClick={handleClearSelection} className="text-xs font-semibold text-gray-500 hover:underline">Clear</button>
             </div>
           </div>
+          <div className="relative mb-3">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={projectSearch}
+              onChange={e => setProjectSearch(e.target.value)}
+              placeholder="Search project or team..."
+              className="w-full pl-10 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            />
+          </div>
           <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
-            {allProjects.map(project => {
+            {filteredProjects.map(project => {
               const selected = selectedProjectIds.includes(project.id);
               const itemCount = gantItems.filter(item => item.projectId === project.id).length;
               return (
@@ -1073,6 +1120,9 @@ ${generatedHTML}</body></html>`;
             {allProjects.length === 0 && (
               <p className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center">No accessible projects.</p>
             )}
+            {allProjects.length > 0 && filteredProjects.length === 0 && (
+              <p className="text-sm text-gray-400 dark:text-gray-500 py-8 text-center">No project matches your search.</p>
+            )}
           </div>
         </section>
 
@@ -1089,21 +1139,32 @@ ${generatedHTML}</body></html>`;
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Project</label>
-              <select
-                value={form.projectId}
-                onChange={e => setForm(prev => ({ ...prev, projectId: e.target.value, dependsOnIds: [] }))}
-                className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              >
-                <option value="">Select project...</option>
-                {allProjects.map(project => (
-                  <option key={project.id} value={project.id}>{project.teamName} • {project.name}</option>
-                ))}
-              </select>
+              {!canUseForm ? (
+                <div className="w-full px-3 py-2 text-xs border border-dashed border-amber-300 dark:border-amber-700 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300">
+                  Select at least one project in Step 1 to enable this form.
+                </div>
+              ) : hasSingleSelectedProject ? (
+                <div className="w-full px-3 py-2.5 text-sm border border-emerald-200 dark:border-emerald-700 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 font-semibold">
+                  {selectedProjects[0].teamName} • {selectedProjects[0].name}
+                  <span className="ml-2 text-[11px] font-bold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Auto</span>
+                </div>
+              ) : (
+                <select
+                  value={activeFormProjectId}
+                  onChange={e => setForm(prev => ({ ...prev, projectId: e.target.value, dependsOnIds: [] }))}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                >
+                  <option value="">Select project...</option>
+                  {selectedProjects.map(project => (
+                    <option key={project.id} value={project.id}>{project.teamName} • {project.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div className="flex items-end">
               <button
                 onClick={handleAIGenerateFromProjectData}
-                disabled={isAIGeneratingProjectMilestones || !(form.projectId || defaultProjectId)}
+                disabled={isAIGeneratingProjectMilestones || !activeFormProjectId}
                 className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
               >
                 <Sparkles className={`w-4 h-4 ${isAIGeneratingProjectMilestones ? 'animate-spin' : ''}`} />
@@ -1269,7 +1330,8 @@ ${generatedHTML}</body></html>`;
           <div className="flex gap-2 mt-4">
             <button
               onClick={handleSaveRoadmapItem}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+              disabled={!activeFormProjectId}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Save className="w-4 h-4" /> {editingItemId ? 'Update Item' : 'Add Item'}
             </button>
