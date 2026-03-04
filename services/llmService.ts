@@ -1430,6 +1430,224 @@ RETURN ONLY VALID JSON. NO MARKDOWN.
     }
 };
 
+export const extractPMGanttItemsFromText = async (text: string, config: LLMConfig): Promise<Array<{
+    title: string;
+    description: string;
+    owner: string;
+    startDate: string;
+    endDate: string;
+    status: 'Planned' | 'In Progress' | 'Done' | 'Blocked' | '';
+    priority: 'Low' | 'Medium' | 'High' | 'Critical' | '';
+    progressPct: number | null;
+    isMilestone: boolean | null;
+    notes: string;
+}>> => {
+    const today = new Date().toISOString().split('T')[0];
+    const prompt = `
+You are a PM Gantt Extraction Assistant. Analyze the text and extract one OR multiple roadmap milestones.
+
+TEXT TO ANALYZE:
+${text}
+
+CRITICAL RULES:
+1. Extract ONLY explicit information. Do NOT invent.
+2. If information is missing, keep empty values.
+3. Return [] if no milestone/task-like element is clearly present.
+4. Dates must be YYYY-MM-DD, else "".
+5. status must be one of: "Planned", "In Progress", "Done", "Blocked" (else "").
+6. priority must be one of: "Low", "Medium", "High", "Critical" (else "").
+7. progressPct must be 0..100 or null.
+8. isMilestone must be true/false only if explicit, else null.
+9. Today's date is ${today}; only use if relative dates are explicit.
+
+RETURN ONLY VALID JSON. NO MARKDOWN.
+
+{
+  "items": [
+    {
+      "title": "",
+      "description": "",
+      "owner": "",
+      "startDate": "",
+      "endDate": "",
+      "status": "",
+      "priority": "",
+      "progressPct": null,
+      "isMilestone": null,
+      "notes": ""
+    }
+  ]
+}
+`;
+
+    const toString = (value: any): string => typeof value === 'string' ? value : '';
+    const toNumberOrNull = (value: any): number | null => {
+        if (value == null) return null;
+        const n = typeof value === 'number' ? value : parseFloat(String(value).replace(',', '.'));
+        return Number.isFinite(n) ? n : null;
+    };
+
+    try {
+        const rawResponse = await runPrompt(prompt, config);
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+        return rawItems
+            .map((item: any) => {
+                const status = toString(item?.status);
+                const priority = toString(item?.priority);
+                const progress = toNumberOrNull(item?.progressPct);
+                return {
+                    title: toString(item?.title),
+                    description: toString(item?.description),
+                    owner: toString(item?.owner),
+                    startDate: toString(item?.startDate),
+                    endDate: toString(item?.endDate),
+                    status: (status === 'Planned' || status === 'In Progress' || status === 'Done' || status === 'Blocked') ? status : '',
+                    priority: (priority === 'Low' || priority === 'Medium' || priority === 'High' || priority === 'Critical') ? priority : '',
+                    progressPct: progress == null ? null : Math.max(0, Math.min(100, Math.round(progress))),
+                    isMilestone: item?.isMilestone === true ? true : item?.isMilestone === false ? false : null,
+                    notes: toString(item?.notes),
+                };
+            })
+            .filter(item => item.title.trim().length > 0);
+    } catch (e) {
+        console.error("Failed to parse PM Gantt multi-item extraction JSON", e);
+        return [];
+    }
+};
+
+export const generatePMGanttMilestonesFromProject = async (
+    project: Project,
+    existingItems: PMGanttItem[],
+    config: LLMConfig
+): Promise<Array<{
+    title: string;
+    description: string;
+    owner: string;
+    startDate: string;
+    endDate: string;
+    status: 'Planned' | 'In Progress' | 'Done' | 'Blocked' | '';
+    priority: 'Low' | 'Medium' | 'High' | 'Critical' | '';
+    progressPct: number | null;
+    notes: string;
+}>> => {
+    const dataset = {
+        project: {
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            status: project.status,
+            deadline: project.deadline,
+            owner: project.owner || '',
+            architect: project.architect || '',
+            additionalDescriptions: project.additionalDescriptions || [],
+            taskCount: project.tasks.length,
+            tasks: project.tasks.map(task => ({
+                title: task.title,
+                description: task.description,
+                status: task.status,
+                priority: task.priority,
+                eta: task.eta,
+                assigneeId: task.assigneeId || '',
+                checklistCount: (task.checklist || []).length,
+                actionsCount: (task.actions || []).length,
+            })),
+            dependencies: project.dependencies || [],
+            externalDependencies: (project.externalDependencies || []).map(dep => ({
+                label: dep.label,
+                status: dep.status,
+            })),
+        },
+        existingRoadmapItems: existingItems.map(item => ({
+            title: item.title,
+            startDate: item.startDate,
+            endDate: item.endDate,
+            status: item.status,
+            isMilestone: item.isMilestone === true,
+        })),
+    };
+
+    const prompt = `
+You are a PMO planning assistant. Build milestone suggestions for a Gantt roadmap based strictly on project data.
+Do NOT invent unknown business facts. If data is weak, return fewer milestones or [].
+
+PROJECT DATA:
+${JSON.stringify(dataset, null, 2)}
+
+GOAL:
+- Suggest up to 8 meaningful milestones.
+- Favor explicit task names, deadlines, statuses, dependencies, and known constraints.
+- Avoid duplicates with existing roadmap items.
+- If there is not enough data, return [].
+
+RULES:
+1. Output JSON only.
+2. For each milestone:
+   - title: concise and action-oriented
+   - description: 1 sentence max
+   - owner: inferred only if explicit, else ""
+   - startDate/endDate: YYYY-MM-DD or ""
+   - status: one of "Planned", "In Progress", "Done", "Blocked" or ""
+   - priority: one of "Low", "Medium", "High", "Critical" or ""
+   - progressPct: number 0..100 or null
+   - notes: optional short note
+3. Never fabricate dates/owners if not inferable from explicit data.
+
+{
+  "milestones": [
+    {
+      "title": "",
+      "description": "",
+      "owner": "",
+      "startDate": "",
+      "endDate": "",
+      "status": "",
+      "priority": "",
+      "progressPct": null,
+      "notes": ""
+    }
+  ]
+}
+`;
+
+    const toString = (value: any): string => typeof value === 'string' ? value : '';
+    const toNumberOrNull = (value: any): number | null => {
+        if (value == null) return null;
+        const n = typeof value === 'number' ? value : parseFloat(String(value).replace(',', '.'));
+        return Number.isFinite(n) ? n : null;
+    };
+
+    try {
+        const rawResponse = await runPrompt(prompt, config);
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        const rawMilestones = Array.isArray(parsed.milestones) ? parsed.milestones : [];
+        return rawMilestones
+            .map((item: any) => {
+                const status = toString(item?.status);
+                const priority = toString(item?.priority);
+                const progress = toNumberOrNull(item?.progressPct);
+                return {
+                    title: toString(item?.title),
+                    description: toString(item?.description),
+                    owner: toString(item?.owner),
+                    startDate: toString(item?.startDate),
+                    endDate: toString(item?.endDate),
+                    status: (status === 'Planned' || status === 'In Progress' || status === 'Done' || status === 'Blocked') ? status : '',
+                    priority: (priority === 'Low' || priority === 'Medium' || priority === 'High' || priority === 'Critical') ? priority : '',
+                    progressPct: progress == null ? null : Math.max(0, Math.min(100, Math.round(progress))),
+                    notes: toString(item?.notes),
+                };
+            })
+            .filter(item => item.title.trim().length > 0)
+            .slice(0, 8);
+    } catch (e) {
+        console.error("Failed to parse PM Gantt project milestone JSON", e);
+        return [];
+    }
+};
+
 export const generatePMGanttNarrative = async (
     projects: Array<{ id: string; name: string; teamName: string; status: string; deadline: string; items: PMGanttItem[] }>,
     config: LLMConfig
@@ -1520,6 +1738,255 @@ RETURN ONLY VALID JSON:
         };
     } catch (e) {
         console.error("Failed to parse PM Gantt narrative JSON", e);
+        return defaultResult;
+    }
+};
+
+export interface PMProjectCardLLMInput {
+    projects: Array<{
+        id: string;
+        name: string;
+        teamName: string;
+        status: string;
+        deadline: string;
+        description: string;
+        owner: string;
+        managerName: string;
+        costMD: number | null;
+        tasks: Array<{
+            title: string;
+            status: string;
+            priority: string;
+            eta: string;
+            assigneeName: string;
+            description: string;
+        }>;
+        externalDependencies: Array<{ label: string; status: string }>;
+    }>;
+    pmReports: Array<{
+        projectId: string;
+        version: number;
+        overallStatus: string;
+        executiveSummary: string;
+        keyDecisions: string;
+        nextSteps: string;
+        budgetAllocated: number | null;
+        budgetSpent: number | null;
+        budgetForecast: number | null;
+        incidents: Array<{ title: string; severity: string; status: string; description: string }>;
+        risks: Array<{ description: string; likelihood: string; impact: string; mitigation: string; owner: string }>;
+        milestones: Array<{ name: string; plannedDate: string; revisedDate: string; status: string; completionPct: number }>;
+    }>;
+    roadmapItems: Array<{
+        projectId: string;
+        title: string;
+        owner: string;
+        startDate: string;
+        endDate: string;
+        status: string;
+        progressPct: number;
+        priority: string;
+        isMilestone: boolean;
+    }>;
+    oneOffQueries: Array<{
+        id: string;
+        projectId: string | null;
+        title: string;
+        requester: string;
+        sponsor: string;
+        status: string;
+        etaRequested: string;
+        description: string;
+        estimatedCostMD: number | null;
+        finalCostMD: number | null;
+    }>;
+    commonLinkHint?: string;
+    manualContext?: string;
+}
+
+export interface PMProjectCardLLMOutput {
+    cardTitle: string;
+    commonLink: string;
+    executiveSponsor: string;
+    projectManager: string;
+    overallHealth: 'Green' | 'Amber' | 'Red' | '';
+    projectObjective: string;
+    executiveSummary: string;
+    keyAchievements: string[];
+    milestones: Array<{
+        description: string;
+        baselineDate: string;
+        forecastOrActualDate: string;
+        status: 'On Track' | 'Delayed' | 'Completed' | '';
+    }>;
+    financials: {
+        totalBudgetMD: number | null;
+        actualSpendMD: number | null;
+        varianceMD: number | null;
+        etcMD: number | null;
+    };
+    ridItems: Array<{
+        risk: string;
+        issue: string;
+        dependency: string;
+        mitigation: string;
+    }>;
+    keyDecisions: string[];
+    approvalsNeeded: string[];
+    resourceRequests: string[];
+    escalations: string[];
+}
+
+export const generatePMProjectCardDraft = async (
+    input: PMProjectCardLLMInput,
+    config: LLMConfig
+): Promise<PMProjectCardLLMOutput> => {
+    const today = new Date().toISOString().split('T')[0];
+    const prompt = `
+You are a senior PMO assistant creating a board-ready Project Card draft for a Steering Committee.
+Use ONLY the provided DOINg data. NEVER invent facts. If data is missing, keep fields empty.
+
+DATA:
+${JSON.stringify(input, null, 2)}
+
+CRITICAL RULES:
+1. No hallucinations. No guessed dates, names, costs, risks, or decisions.
+2. If unknown:
+   - strings -> ""
+   - numbers -> null
+   - arrays -> []
+3. overallHealth must be one of "Green", "Amber", "Red" (or "").
+4. milestone.status must be one of "On Track", "Delayed", "Completed" (or "").
+5. milestone dates must be YYYY-MM-DD or "".
+6. Keep language professional and concise for SteerCo.
+7. Prefer explicit facts from PM reports, tasks, roadmap, and linked one-off queries.
+8. Financial values are in MD (Man Days).
+9. Today's date is ${today}.
+
+RETURN ONLY VALID JSON. NO MARKDOWN. NO CODE BLOCKS.
+
+{
+  "cardTitle": "",
+  "commonLink": "",
+  "executiveSponsor": "",
+  "projectManager": "",
+  "overallHealth": "",
+  "projectObjective": "",
+  "executiveSummary": "",
+  "keyAchievements": [""],
+  "milestones": [
+    {
+      "description": "",
+      "baselineDate": "",
+      "forecastOrActualDate": "",
+      "status": ""
+    }
+  ],
+  "financials": {
+    "totalBudgetMD": null,
+    "actualSpendMD": null,
+    "varianceMD": null,
+    "etcMD": null
+  },
+  "ridItems": [
+    {
+      "risk": "",
+      "issue": "",
+      "dependency": "",
+      "mitigation": ""
+    }
+  ],
+  "keyDecisions": [""],
+  "approvalsNeeded": [""],
+  "resourceRequests": [""],
+  "escalations": [""]
+}
+`;
+
+    const defaultResult: PMProjectCardLLMOutput = {
+        cardTitle: '',
+        commonLink: '',
+        executiveSponsor: '',
+        projectManager: '',
+        overallHealth: '',
+        projectObjective: '',
+        executiveSummary: '',
+        keyAchievements: [],
+        milestones: [],
+        financials: {
+            totalBudgetMD: null,
+            actualSpendMD: null,
+            varianceMD: null,
+            etcMD: null,
+        },
+        ridItems: [],
+        keyDecisions: [],
+        approvalsNeeded: [],
+        resourceRequests: [],
+        escalations: [],
+    };
+
+    const toString = (value: any): string => typeof value === 'string' ? value : '';
+    const toNumberOrNull = (value: any): number | null => {
+        if (value == null) return null;
+        const parsed = typeof value === 'number' ? value : parseFloat(String(value).replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : null;
+    };
+    const toList = (value: any): string[] =>
+        Array.isArray(value)
+            ? value.map((entry: any) => String(entry || '').trim()).filter(Boolean)
+            : [];
+    const toHealth = (value: any): 'Green' | 'Amber' | 'Red' | '' => {
+        const v = toString(value);
+        return (v === 'Green' || v === 'Amber' || v === 'Red') ? v : '';
+    };
+    const toMilestoneStatus = (value: any): 'On Track' | 'Delayed' | 'Completed' | '' => {
+        const v = toString(value);
+        return (v === 'On Track' || v === 'Delayed' || v === 'Completed') ? v : '';
+    };
+
+    try {
+        const rawResponse = await runPrompt(prompt, config);
+        const cleanJson = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        return {
+            cardTitle: toString(parsed.cardTitle),
+            commonLink: toString(parsed.commonLink),
+            executiveSponsor: toString(parsed.executiveSponsor),
+            projectManager: toString(parsed.projectManager),
+            overallHealth: toHealth(parsed.overallHealth),
+            projectObjective: toString(parsed.projectObjective),
+            executiveSummary: toString(parsed.executiveSummary),
+            keyAchievements: toList(parsed.keyAchievements).slice(0, 12),
+            milestones: Array.isArray(parsed.milestones)
+                ? parsed.milestones.map((m: any) => ({
+                    description: toString(m?.description),
+                    baselineDate: toString(m?.baselineDate),
+                    forecastOrActualDate: toString(m?.forecastOrActualDate),
+                    status: toMilestoneStatus(m?.status),
+                })).filter((m: any) => m.description)
+                : [],
+            financials: {
+                totalBudgetMD: toNumberOrNull(parsed?.financials?.totalBudgetMD),
+                actualSpendMD: toNumberOrNull(parsed?.financials?.actualSpendMD),
+                varianceMD: toNumberOrNull(parsed?.financials?.varianceMD),
+                etcMD: toNumberOrNull(parsed?.financials?.etcMD),
+            },
+            ridItems: Array.isArray(parsed.ridItems)
+                ? parsed.ridItems.map((item: any) => ({
+                    risk: toString(item?.risk),
+                    issue: toString(item?.issue),
+                    dependency: toString(item?.dependency),
+                    mitigation: toString(item?.mitigation),
+                })).filter((item: any) => item.risk || item.issue || item.dependency || item.mitigation)
+                : [],
+            keyDecisions: toList(parsed.keyDecisions).slice(0, 12),
+            approvalsNeeded: toList(parsed.approvalsNeeded).slice(0, 12),
+            resourceRequests: toList(parsed.resourceRequests).slice(0, 12),
+            escalations: toList(parsed.escalations).slice(0, 12),
+        };
+    } catch (e) {
+        console.error("Failed to parse PM Project Card draft JSON", e);
         return defaultResult;
     }
 };

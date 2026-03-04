@@ -90,6 +90,11 @@ export const sanitizeAppState = (data: any): AppState => {
         })) : [],
     }));
 
+    const teamNameById = state.teams.reduce((acc, team) => {
+        acc[team.id] = team.name;
+        return acc;
+    }, {} as Record<string, string>);
+
     state.pmReportData = state.pmReportData.map((r: any) => ({
         ...r,
         incidents: Array.isArray(r.incidents) ? r.incidents : [],
@@ -97,7 +102,20 @@ export const sanitizeAppState = (data: any): AppState => {
         news: Array.isArray(r.news) ? r.news : [],
         milestones: Array.isArray(r.milestones) ? r.milestones : [],
         risks: Array.isArray(r.risks) ? r.risks : [],
-        costDistribution: Array.isArray(r.costDistribution) ? r.costDistribution : [],
+        costDistribution: Array.isArray(r.costDistribution)
+            ? r.costDistribution.map((split: any) => {
+                const legacyTeamId = typeof split?.teamId === 'string' ? split.teamId : '';
+                const explicitTeamName = typeof split?.teamName === 'string' ? split.teamName : '';
+                return {
+                    ...split,
+                    teamId: legacyTeamId || undefined,
+                    teamName: explicitTeamName || teamNameById[legacyTeamId] || legacyTeamId || '',
+                    allocatedMD: Number.isFinite(Number(split?.allocatedMD)) ? Number(split.allocatedMD) : 0,
+                    spentMD: Number.isFinite(Number(split?.spentMD)) ? Number(split.spentMD) : 0,
+                    forecastMD: Number.isFinite(Number(split?.forecastMD)) ? Number(split.forecastMD) : 0,
+                };
+            })
+            : [],
         confidentialityLevel:
             r.confidentialityLevel === 'Public' ||
             r.confidentialityLevel === 'Internal' ||

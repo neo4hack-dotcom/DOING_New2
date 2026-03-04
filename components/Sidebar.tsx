@@ -8,10 +8,11 @@ interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
   showPMGant?: boolean;
+  showPMProjectCard?: boolean;
   onLogout: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, showPMGant = false, onLogout }) => {
+const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, showPMGant = false, showPMProjectCard = false, onLogout }) => {
   const isAdmin = currentUser?.role === UserRole.ADMIN;
   const isExternalPM = currentUser?.role === UserRole.EXTERNAL_PM;
   const showManagement = isAdmin;
@@ -98,6 +99,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentUser, activeTab, onTabChange, 
           <FileBarChart className="w-4 h-4 mr-3" />
           PM Report
         </button>
+
+        {showPMProjectCard && (
+          <button onClick={() => onTabChange('pm-project-card')} className={navItemClass('pm-project-card')}>
+            <ClipboardList className="w-4 h-4 mr-3" />
+            PM - Project card
+          </button>
+        )}
 
         {showPMGant && (
           <button onClick={() => onTabChange('pm-gant')} className={navItemClass('pm-gant')}>

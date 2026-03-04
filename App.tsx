@@ -20,6 +20,7 @@ import KanbanView from './components/KanbanView';
 import OneOffQueryManager from './components/OneOffQueryManager';
 import PMReport from './components/PMReport';
 import PMGant from './components/PMGant';
+import PMProjectCard from './components/PMProjectCard';
 
 import { loadState, saveState, subscribeToStoreUpdates, updateAppState, fetchFromServer, generateId, sanitizeAppState } from './services/storage';
 import { AppState, User, Team, UserRole, Meeting, LLMConfig, WeeklyReport as WeeklyReportType, WorkingGroup, SystemMessage, AppNotification, SmartTodo, OneOffQuery, PMReportData, PMGanttItem } from './types';
@@ -872,11 +873,13 @@ const AppContent: React.FC = () => {
   }
 
   const getPageTitle = () => {
+      if (activeTab === 'pm-project-card') return 'PM - Project card';
       if (activeTab === 'pm-gant') return 'PM Gant';
       return activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace('-', ' ');
   }
 
   const canAccessPMGant = viewState.teams.some(team => (team.projects || []).length > 0);
+  const canAccessPMProjectCard = canAccessPMGant;
 
   return (
     <div className="flex bg-gray-50 dark:bg-gray-950 min-h-screen font-sans transition-colors duration-200">
@@ -925,6 +928,7 @@ const AppContent: React.FC = () => {
         activeTab={activeTab}
         onTabChange={setActiveTab}
         showPMGant={canAccessPMGant}
+        showPMProjectCard={canAccessPMProjectCard}
         onLogout={handleLogout}
       />
 
@@ -1024,6 +1028,17 @@ const AppContent: React.FC = () => {
             {activeTab === 'smart-todo' && appState.currentUser && <SmartTodoManager todos={viewState.smartTodos || []} currentUser={appState.currentUser} llmConfig={appState.llmConfig} onSaveTodo={handleSaveTodo} onDeleteTodo={handleDeleteTodo} users={appState.users} onAddNotification={addNotification} />}
             {activeTab === 'one-off-queries' && appState.currentUser && <OneOffQueryManager queries={appState.oneOffQueries || []} teams={viewState.teams} users={appState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} onSaveQuery={handleSaveOneOffQuery} onDeleteQuery={handleDeleteOneOffQuery} />}
             {activeTab === 'pm-report' && appState.currentUser && <PMReport teams={viewState.teams} users={viewState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} pmReportData={appState.pmReportData || []} onSavePMReport={handleSavePMReport} onDeletePMReport={handleDeletePMReport} />}
+            {activeTab === 'pm-project-card' && appState.currentUser && (
+              <PMProjectCard
+                teams={viewState.teams}
+                users={viewState.users}
+                currentUser={appState.currentUser}
+                llmConfig={appState.llmConfig}
+                oneOffQueries={(appState.oneOffQueries || []).filter(q => viewState.teams.some(t => t.id === q.teamId))}
+                pmReportData={(appState.pmReportData || []).filter(r => viewState.teams.some(t => (t.projects || []).some(p => p.id === r.projectId)))}
+                gantItems={viewState.pmGantData || []}
+              />
+            )}
             {activeTab === 'pm-gant' && appState.currentUser && <PMGant teams={viewState.teams} users={viewState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} gantItems={viewState.pmGantData || []} onSaveItem={handleSavePMGantItem} onDeleteItem={handleDeletePMGantItem} />}
             {activeTab === 'admin-users' && <AdminPanel users={appState.users} teams={appState.teams} onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser} onAddTeam={handleAddTeam} onUpdateTeam={handleUpdateTeam} onDeleteTeam={handleDeleteTeam} />}
             {activeTab === 'settings' && <SettingsPanel config={appState.llmConfig} appState={appState} onSave={handleUpdateLLMConfig} onImport={handleImportState} onUpdateUserPassword={handleUpdateUserPassword} onUpdateSystemMessage={handleUpdateSystemMessage} />}

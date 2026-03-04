@@ -16,7 +16,12 @@ import {
 } from 'lucide-react';
 import { LLMConfig, PMGanttItem, PMGanttPriority, PMGanttStatus, Project, Team, User } from '../types';
 import { generateId } from '../services/storage';
-import { extractPMGanttItemFromText, generatePMGanttNarrative } from '../services/llmService';
+import {
+  extractPMGanttItemFromText,
+  extractPMGanttItemsFromText,
+  generatePMGanttMilestonesFromProject,
+  generatePMGanttNarrative
+} from '../services/llmService';
 
 interface PMGantProps {
   teams: Team[];
@@ -83,6 +88,7 @@ const plusDaysISO = (days: number): string => {
 };
 
 const clampPct = (value: number): number => Math.max(0, Math.min(100, Math.round(value)));
+const normalizeTitle = (value: string): string => value.trim().toLowerCase().replace(/\s+/g, ' ');
 
 const parseDate = (value: string): Date | null => {
   if (!value) return null;
@@ -297,8 +303,11 @@ const PMGant: React.FC<PMGantProps> = ({
   const [generatedHTML, setGeneratedHTML] = useState('');
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false);
   const [isAIAutofilling, setIsAIAutofilling] = useState(false);
+  const [isAIBulkCreating, setIsAIBulkCreating] = useState(false);
+  const [isAIGeneratingProjectMilestones, setIsAIGeneratingProjectMilestones] = useState(false);
   const [aiInput, setAiInput] = useState('');
   const [aiError, setAiError] = useState('');
+  const [aiInfo, setAiInfo] = useState('');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   const allProjects = useMemo<PMGantProject[]>(() => {
@@ -318,6 +327,11 @@ const PMGant: React.FC<PMGantProps> = ({
     allProjects.forEach(project => map.set(project.id, project));
     return map;
   }, [allProjects]);
+
+  const ownerSuggestions = useMemo(
+    () => Array.from(new Set(users.map(user => `${user.firstName} ${user.lastName}`.trim()).filter(Boolean))),
+    [users]
+  );
 
   useEffect(() => {
     setSelectedProjectIds(prev => prev.filter(id => projectById.has(id)));
@@ -365,6 +379,69 @@ const PMGant: React.FC<PMGantProps> = ({
       });
   }, [gantItems, selectedProjectIds]);
 
+  const saveDraftItems = (
+    projectId: string,
+    drafts: Array<{
+      title: string;
+      description?: string;
+      owner?: string;
+      startDate?: string;
+      endDate?: string;
+      status?: PMGanttStatus | '';
+      priority?: PMGanttPriority | '';
+      progressPct?: number | null;
+      notes?: string;
+      isMilestone?: boolean | null;
+    }>
+  ): number => {
+    const project = projectById.get(projectId);
+    if (!project) return 0;
+
+    const existingTitles = new Set(
+      gantItems
+        .filter(item => item.projectId === projectId)
+        .map(item => normalizeTitle(item.title))
+    );
+
+    let created = 0;
+    drafts.forEach(draft => {
+      const title = (draft.title || '').trim();
+      if (!title) return;
+      const normalized = normalizeTitle(title);
+      if (existingTitles.has(normalized)) return;
+
+      const startDate = draft.startDate && parseDate(draft.startDate) ? draft.startDate : todayISO();
+      const proposedEnd = draft.endDate && parseDate(draft.endDate) ? draft.endDate : plusDaysISO(14);
+      const start = parseDate(startDate) || new Date(`${todayISO()}T00:00:00`);
+      const end = parseDate(proposedEnd) || addDays(start, 14);
+      const endDate = end.getTime() < start.getTime() ? toISODate(addDays(start, 14)) : proposedEnd;
+
+      const now = new Date().toISOString();
+      const nextItem: PMGanttItem = {
+        id: generateId(),
+        projectId,
+        createdByUserId: currentUser.id,
+        createdAt: now,
+        updatedAt: now,
+        title,
+        description: (draft.description || '').trim(),
+        owner: (draft.owner || '').trim() || project.owner || `${currentUser.firstName} ${currentUser.lastName}`.trim(),
+        startDate,
+        endDate,
+        progressPct: clampPct(draft.progressPct == null ? 0 : draft.progressPct),
+        status: (draft.status && STATUS_VALUES.includes(draft.status as PMGanttStatus)) ? (draft.status as PMGanttStatus) : 'Planned',
+        priority: (draft.priority && PRIORITY_VALUES.includes(draft.priority as PMGanttPriority)) ? (draft.priority as PMGanttPriority) : 'Medium',
+        isMilestone: draft.isMilestone !== false,
+        notes: (draft.notes || '').trim(),
+      };
+      onSaveItem(nextItem);
+      existingTitles.add(normalized);
+      created += 1;
+    });
+
+    return created;
+  };
+
   const resetForm = () => {
     setEditingItemId(null);
     setForm({
@@ -382,6 +459,7 @@ const PMGant: React.FC<PMGantProps> = ({
     });
     setAiInput('');
     setAiError('');
+    setAiInfo('');
   };
 
   const toggleProject = (projectId: string) => {
@@ -459,6 +537,7 @@ const PMGant: React.FC<PMGantProps> = ({
       return;
     }
     setAiError('');
+    setAiInfo('');
     setIsAIAutofilling(true);
     try {
       const extracted = await extractPMGanttItemFromText(aiInput, llmConfig);
@@ -480,6 +559,94 @@ const PMGant: React.FC<PMGantProps> = ({
       setAiError(e?.message || 'AI autofill failed.');
     } finally {
       setIsAIAutofilling(false);
+    }
+  };
+
+  const handleAICreateMilestonesFromText = async () => {
+    const projectId = form.projectId || defaultProjectId;
+    if (!projectId) {
+      setAiError('Select a project before creating milestones from text.');
+      return;
+    }
+    if (!aiInput.trim()) {
+      setAiError('Paste text containing milestones first.');
+      return;
+    }
+
+    setAiError('');
+    setAiInfo('');
+    setIsAIBulkCreating(true);
+    try {
+      const drafts = await extractPMGanttItemsFromText(aiInput, llmConfig);
+      if (drafts.length === 0) {
+        setAiError('AI did not find explicit milestone information. You can continue manually in the form.');
+        return;
+      }
+      const created = saveDraftItems(
+        projectId,
+        drafts.map(draft => ({
+          ...draft,
+          isMilestone: draft.isMilestone == null ? true : draft.isMilestone,
+        }))
+      );
+
+      if (created === 0) {
+        setAiError('No new milestones were created (duplicates or empty extraction).');
+        return;
+      }
+      setAiInfo(`${created} milestone${created > 1 ? 's' : ''} created from pasted text. You can edit them anytime below.`);
+      if (!selectedProjectIds.includes(projectId)) {
+        setSelectedProjectIds(prev => [...prev, projectId]);
+      }
+    } catch (e: any) {
+      setAiError(e?.message || 'Bulk milestone creation failed.');
+    } finally {
+      setIsAIBulkCreating(false);
+    }
+  };
+
+  const handleAIGenerateFromProjectData = async () => {
+    const projectId = form.projectId || defaultProjectId;
+    if (!projectId) {
+      setAiError('Select a project first.');
+      return;
+    }
+    const project = projectById.get(projectId);
+    if (!project) {
+      setAiError('Selected project is not available.');
+      return;
+    }
+
+    setAiError('');
+    setAiInfo('');
+    setIsAIGeneratingProjectMilestones(true);
+    try {
+      const existingForProject = gantItems.filter(item => item.projectId === projectId);
+      const drafts = await generatePMGanttMilestonesFromProject(project, existingForProject, llmConfig);
+      if (drafts.length === 0) {
+        setAiError('Not enough explicit project information to generate milestones automatically. You can fill the form manually or paste text.');
+        return;
+      }
+
+      const created = saveDraftItems(
+        projectId,
+        drafts.map(draft => ({
+          ...draft,
+          isMilestone: true,
+        }))
+      );
+      if (created === 0) {
+        setAiError('AI suggestions were duplicates of existing milestones.');
+        return;
+      }
+      setAiInfo(`${created} milestone${created > 1 ? 's' : ''} generated from project data. Edit them below if needed.`);
+      if (!selectedProjectIds.includes(projectId)) {
+        setSelectedProjectIds(prev => [...prev, projectId]);
+      }
+    } catch (e: any) {
+      setAiError(e?.message || 'AI milestone generation from project data failed.');
+    } finally {
+      setIsAIGeneratingProjectMilestones(false);
     }
   };
 
@@ -719,14 +886,35 @@ ${generatedHTML}</body></html>`;
                 ))}
               </select>
             </div>
+            <div className="flex items-end">
+              <button
+                onClick={handleAIGenerateFromProjectData}
+                disabled={isAIGeneratingProjectMilestones || !(form.projectId || defaultProjectId)}
+                className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              >
+                <Sparkles className={`w-4 h-4 ${isAIGeneratingProjectMilestones ? 'animate-spin' : ''}`} />
+                AI Create Milestones (Project Data)
+              </button>
+            </div>
+            <div className="md:col-span-2 -mt-1">
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                If project data is too limited, AI will not invent milestones. In that case, add milestones manually or paste text in the AI assistant below.
+              </p>
+            </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Owner</label>
               <input
+                list="pm-gant-owner-list"
                 value={form.owner}
                 onChange={e => setForm(prev => ({ ...prev, owner: e.target.value }))}
                 className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                 placeholder="Owner name"
               />
+              <datalist id="pm-gant-owner-list">
+                {ownerSuggestions.map(owner => (
+                  <option key={owner} value={owner} />
+                ))}
+              </datalist>
             </div>
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Title</label>
@@ -837,22 +1025,35 @@ ${generatedHTML}</body></html>`;
           <div className="mt-5 p-4 rounded-lg border border-indigo-100 dark:border-indigo-800 bg-indigo-50/60 dark:bg-indigo-900/20">
             <div className="flex items-center justify-between mb-2">
               <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100 flex items-center gap-2">
-                <Wand2 className="w-4 h-4" /> AI Autofill
+                <Wand2 className="w-4 h-4" /> AI Milestone Assistant
               </h4>
-              <button
-                onClick={handleAIAutofill}
-                disabled={isAIAutofilling || !aiInput.trim()}
-                className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-              >
-                <Sparkles className={`w-3.5 h-3.5 ${isAIAutofilling ? 'animate-spin' : ''}`} />
-                Autofill from text
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAIAutofill}
+                  disabled={isAIAutofilling || !aiInput.trim()}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${isAIAutofilling ? 'animate-spin' : ''}`} />
+                  Autofill Form
+                </button>
+                <button
+                  onClick={handleAICreateMilestonesFromText}
+                  disabled={isAIBulkCreating || !aiInput.trim()}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-teal-600 rounded-md hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                >
+                  <Sparkles className={`w-3.5 h-3.5 ${isAIBulkCreating ? 'animate-spin' : ''}`} />
+                  Create Milestones
+                </button>
+              </div>
             </div>
             <p className="text-xs text-indigo-700 dark:text-indigo-300 mb-2">
-              Paste rough notes, an email excerpt, or a planning paragraph. Local LLM will structure title/dates/status/milestone fields.
+              Paste rough notes, an email excerpt, or a text containing one or multiple milestones. Use "Autofill Form" for one draft, or "Create Milestones" for bulk creation.
             </p>
             {aiError && (
               <p className="text-xs text-red-600 dark:text-red-400 mb-2">{aiError}</p>
+            )}
+            {aiInfo && (
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 mb-2">{aiInfo}</p>
             )}
             <textarea
               value={aiInput}

@@ -416,7 +416,8 @@ export interface PMReportRisk {
 
 export interface PMReportCostSplit {
   id: string;
-  teamId: string;
+  teamName: string; // Free-text team label (not necessarily a DOINg team)
+  teamId?: string; // Legacy optional reference kept for backward compatibility
   allocatedMD?: number;
   spentMD?: number;
   forecastMD?: number;
