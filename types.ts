@@ -142,6 +142,7 @@ export interface Project {
   architect?: string; // Architecte technique
   deadline: string; // Date limite
   cost?: number; // Budget
+  tsdCreated?: boolean; // True if a TSD has been created
   members: ProjectMember[]; // Membres assignés au projet
   tasks: Task[]; // Toutes les tâches du projet
   isImportant: boolean; // Flag de priorité
@@ -313,6 +314,7 @@ export type OneOffQueryRequestSource = 'email' | 'teams' | 'call' | 'other';
 export interface OneOffQuery {
   id: string;
   teamId: string; // Team this query belongs to
+  projectId?: string | null; // Optional linked project within the selected team
   title: string; // Primary visible title of the request
   requester: string; // Free text name of requester
   requesterId?: string | null; // Optional: linked user ID

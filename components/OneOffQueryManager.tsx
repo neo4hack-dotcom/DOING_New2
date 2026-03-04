@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, Minus, Bot, Download, CheckSquare, Square,
   Sparkles, FileText, Mail, AlertCircle, Clock, CheckCircle2,
   XCircle, Database, Users, Inbox, Archive, Code2, Lightbulb,
-  Phone, MessageSquare, ArchiveRestore
+  Phone, MessageSquare, ArchiveRestore, Folder
 } from 'lucide-react';
 import { OneOffQuery, OneOffQueryStatus, OneOffQueryRequestSource, User, Team, LLMConfig, UserRole } from '../types';
 import { generateId } from '../services/storage';
@@ -87,6 +87,7 @@ const SQLBlock: React.FC<{ sql: string }> = ({ sql }) => {
 const blankQuery = (teamId: string): OneOffQuery => ({
   id: '',
   teamId,
+  projectId: null,
   title: '',
   requester: '',
   requesterId: null,
@@ -116,7 +117,7 @@ const blankQuery = (teamId: string): OneOffQuery => ({
 
 const exportToCSV = (queries: OneOffQuery[], teams: Team[], users: User[]) => {
   const headers = [
-    'ID', 'Team', 'Status', 'Archived', 'Title', 'Requester', 'Sponsor',
+    'ID', 'Team', 'Project', 'Status', 'Archived', 'Title', 'Requester', 'Sponsor',
     'Source', 'Email Subject', 'Email Received At',
     'Received Date', 'ETA Requested', 'Description', 'Data Source',
     'Eisenhower Quadrant', 'Tags', 'Assigned To',
@@ -129,6 +130,7 @@ const exportToCSV = (queries: OneOffQuery[], teams: Team[], users: User[]) => {
   };
   const rows = queries.map(q => {
     const team = teams.find(t => t.id === q.teamId);
+    const projectName = team?.projects.find(p => p.id === q.projectId)?.name || '';
     const assignee = q.assignedToUserId ? users.find(u => u.id === q.assignedToUserId) : null;
     const assigneeName = assignee
       ? `${assignee.firstName} ${assignee.lastName}`
@@ -137,7 +139,7 @@ const exportToCSV = (queries: OneOffQuery[], teams: Team[], users: User[]) => {
       ? `Q${q.eisenhowerQuadrant}: ${QUADRANT_CONFIG[q.eisenhowerQuadrant].label}`
       : '';
     return [
-      q.id, team?.name || '', STATUS_CONFIG[q.status].label, q.archived ? 'Yes' : 'No',
+      q.id, team?.name || '', projectName, STATUS_CONFIG[q.status].label, q.archived ? 'Yes' : 'No',
       q.title, q.requester, q.sponsor,
       q.requestSource ? SOURCE_CONFIG[q.requestSource].label : '',
       q.emailSubject || '', q.emailReceivedAt || '',
@@ -175,6 +177,10 @@ interface QueryFormModalProps {
 const QueryFormModal: React.FC<QueryFormModalProps> = ({ initial, teams, users, currentUser, onSave, onClose, title, isFromBot }) => {
   const [form, setForm] = useState<OneOffQuery>(initial);
   const [tagInput, setTagInput] = useState('');
+  const selectedTeamProjects = useMemo(
+    () => teams.find(t => t.id === form.teamId)?.projects || [],
+    [teams, form.teamId]
+  );
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -197,6 +203,16 @@ const QueryFormModal: React.FC<QueryFormModalProps> = ({ initial, teams, users, 
     if (!form.description.trim()) { alert('Description is required.'); return; }
     if (!form.teamId) { alert('Team is required.'); return; }
     onSave({ ...form, updatedAt: new Date().toISOString() });
+  };
+
+  const handleTeamChange = (teamId: string) => {
+    const nextProjects = teams.find(t => t.id === teamId)?.projects || [];
+    const hasCurrentProject = nextProjects.some(p => p.id === form.projectId);
+    setForm(prev => ({
+      ...prev,
+      teamId,
+      projectId: hasCurrentProject ? (prev.projectId ?? null) : null,
+    }));
   };
 
   const inp = 'w-full p-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-400';
@@ -247,9 +263,23 @@ const QueryFormModal: React.FC<QueryFormModalProps> = ({ initial, teams, users, 
             {/* Team */}
             <div>
               <label className={lbl}>Team *</label>
-              <select value={form.teamId} onChange={e => set('teamId', e.target.value)} className={inp}>
+              <select value={form.teamId} onChange={e => handleTeamChange(e.target.value)} className={inp}>
                 <option value="">— Select team —</option>
                 {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+
+            {/* Linked Project */}
+            <div>
+              <label className={lbl}>Linked Project (optional)</label>
+              <select
+                value={form.projectId ?? ''}
+                onChange={e => set('projectId', e.target.value || null)}
+                className={inp}
+                disabled={!form.teamId}
+              >
+                <option value="">— No linked project —</option>
+                {selectedTeamProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </div>
 
@@ -588,6 +618,7 @@ const BotCreateOneOffModal: React.FC<BotCreateOneOffModalProps> = ({
       const draft: OneOffQuery = {
         id: '',
         teamId: defaultTeamId,
+        projectId: null,
         title: extracted.title,
         requester: extracted.requester,
         requesterId: null,
@@ -745,6 +776,7 @@ const BotCreateOneOffModal: React.FC<BotCreateOneOffModalProps> = ({
 
 interface QueryCardProps {
   query: OneOffQuery;
+  teams: Team[];
   users: User[];
   selected: boolean;
   onToggleSelect: () => void;
@@ -756,11 +788,13 @@ interface QueryCardProps {
   aiAssigning: boolean;
 }
 
-const QueryCard: React.FC<QueryCardProps> = ({ query, users, selected, onToggleSelect, onEdit, onDelete, onArchive, onStatusChange, onAIAssign, aiAssigning }) => {
+const QueryCard: React.FC<QueryCardProps> = ({ query, teams, users, selected, onToggleSelect, onEdit, onDelete, onArchive, onStatusChange, onAIAssign, aiAssigning }) => {
   const [expanded, setExpanded] = useState(false);
   const sc = STATUS_CONFIG[query.status];
   const qc = query.eisenhowerQuadrant ? QUADRANT_CONFIG[query.eisenhowerQuadrant] : null;
   const src = query.requestSource ? SOURCE_CONFIG[query.requestSource] : null;
+  const linkedTeam = teams.find(t => t.id === query.teamId);
+  const linkedProject = linkedTeam?.projects.find(p => p.id === query.projectId);
   const assignee = query.assignedToUserId ? users.find(u => u.id === query.assignedToUserId) : null;
   const assigneeName = assignee ? `${assignee.firstName} ${assignee.lastName}` : (query.assignedToFreeText || null);
   const isOverdue = query.etaRequested && query.etaRequested < todayStr() && query.status !== 'done' && query.status !== 'cancelled';
@@ -860,6 +894,7 @@ const QueryCard: React.FC<QueryCardProps> = ({ query, users, selected, onToggleS
                   {query.finalCostMD != null && <span className="ml-1">/ Final: {query.finalCostMD} MD</span>}
                 </span>
               )}
+              {linkedProject && <span className="flex items-center gap-1 text-[11px] text-gray-400"><Folder className="w-3 h-3" /> {linkedProject.name}</span>}
               {query.dataSource && <span className="flex items-center gap-1 text-[11px] text-gray-400"><Database className="w-3 h-3" /> {query.dataSource}</span>}
               {query.sqlQuery && <span className="flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400"><Code2 className="w-3 h-3" /> SQL attached</span>}
               {query.tags.slice(0, 3).map(t => <span key={t} className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded">#{t}</span>)}
@@ -877,6 +912,17 @@ const QueryCard: React.FC<QueryCardProps> = ({ query, users, selected, onToggleS
               <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Full Description</p>
               <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap leading-relaxed">{query.description}</p>
             </div>
+
+            {/* Linked project */}
+            {linkedProject && (
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Linked Project</p>
+                <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-xs text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                  <Folder className="w-3.5 h-3.5 text-gray-400" />
+                  <span className="font-semibold">{linkedProject.name}</span>
+                </div>
+              </div>
+            )}
 
             {/* Email info */}
             {(query.emailSubject || query.emailReceivedAt) && (
@@ -1140,6 +1186,7 @@ const OneOffQueryManager: React.FC<OneOffQueryManagerProps> = ({
           <QueryCard
             key={q.id}
             query={q}
+            teams={teams}
             users={users}
             selected={selectedIds.has(q.id)}
             onToggleSelect={() => toggleSelect(q.id)}

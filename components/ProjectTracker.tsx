@@ -310,6 +310,7 @@ const ProjectTracker: React.FC<ProjectTrackerProps> = ({ teams, users, currentUs
           externalDependencies: [],
           additionalDescriptions: [],
           cost: 0,
+          tsdCreated: false,
           auditLog: []
       };
       setEditingProject(newProject);
@@ -890,6 +891,17 @@ const ProjectTracker: React.FC<ProjectTrackerProps> = ({ teams, users, currentUs
                                 onChange={e => setEditingProject({...editingProject, cost: parseFloat(e.target.value) || 0})} 
                                 className="w-full p-2 border rounded dark:bg-slate-800 dark:border-slate-700 dark:text-white" 
                             />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-500 uppercase cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={!!editingProject.tsdCreated}
+                                    onChange={e => setEditingProject({ ...editingProject, tsdCreated: e.target.checked })}
+                                    className="w-4 h-4 text-indigo-600 rounded"
+                                />
+                                <span>TSD Created</span>
+                            </label>
                           </div>
                       </div>
 
