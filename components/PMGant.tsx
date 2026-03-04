@@ -155,15 +155,25 @@ const buildPMGantDeckHTML = (
     .project-banner{background:linear-gradient(135deg,#00915A 0%,#00A86B 52%,#007A4C 100%);color:#fff;border-radius:12px 12px 0 0;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
     .project-banner h2{margin:0;font-size:19px;line-height:1.2}
     .project-meta{font-size:11px;opacity:.85;margin-top:3px}
-    .project-body{border:1px solid #dbe5ef;border-top:none;border-radius:0 0 12px 12px;background:#fff;padding:14px 16px}
+    .project-body{
+      border:1px solid #dbe5ef;border-top:none;border-radius:0 0 12px 12px;background:#fff;padding:14px 16px;
+      --gantt-col-item:250px;
+      --gantt-col-owner:100px;
+      --gantt-col-status:90px;
+      --gantt-col-dates:130px;
+      --gantt-col-signals:90px;
+      --gantt-col-timeline:minmax(380px,1fr);
+      --gantt-col-gap:10px;
+      --gantt-grid:var(--gantt-col-item) var(--gantt-col-owner) var(--gantt-col-status) var(--gantt-col-dates) var(--gantt-col-signals) var(--gantt-col-timeline);
+    }
     .project-summary{background:#f8fafc;border-left:4px solid #00915A;border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.5;color:#334155;margin-bottom:12px}
     .milestone-list{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px 0}
     .milestone-tag{font-size:10px;font-weight:700;color:#065f46;background:#d1fae5;border:1px solid #a7f3d0;padding:3px 8px;border-radius:999px}
     .dependency-overview{background:#fffbea;border:1px solid #fde68a;border-radius:10px;padding:8px 10px;margin-bottom:10px}
     .dependency-overview-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#92400e;margin-bottom:4px}
     .dependency-item{font-size:10px;color:#78350f;line-height:1.4}
-    .timeline-head{display:grid;grid-template-columns:250px 100px 90px 130px 90px 1fr;gap:10px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 0;border-bottom:1px solid #e2e8f0}
-    .gantt-row{display:grid;grid-template-columns:250px 100px 90px 130px 90px 1fr;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;page-break-inside:avoid;break-inside:avoid-page}
+    .timeline-head{display:grid;grid-template-columns:var(--gantt-grid);gap:var(--gantt-col-gap);font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 0;border-bottom:1px solid #e2e8f0}
+    .gantt-row{display:grid;grid-template-columns:var(--gantt-grid);gap:var(--gantt-col-gap);align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;page-break-inside:avoid;break-inside:avoid-page}
     .gantt-row:last-child{border-bottom:none}
     .task-cell{font-size:12px;color:#0f172a}
     .task-cell strong{display:block;font-size:12px}
@@ -178,9 +188,13 @@ const buildPMGantDeckHTML = (
     .progress-pill{display:inline-flex;min-width:42px;justify-content:center;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;background:#e2e8f0;color:#0f172a}
     .prog-flags{margin-top:3px;font-size:9px;color:#64748b;line-height:1.3}
     .timeline-wrap{position:relative}
-    .timeline-axis{position:relative;height:20px;margin-bottom:6px}
+    .timeline-axis-row{display:grid;grid-template-columns:var(--gantt-grid);gap:var(--gantt-col-gap);padding:5px 0 7px 0}
+    .timeline-axis-spacer{grid-column:1 / span 5}
+    .timeline-axis{grid-column:6;position:relative;height:20px;margin:0}
     .axis-line{position:absolute;top:0;bottom:0;border-left:1px dashed #cbd5e1}
     .axis-label{position:absolute;top:0;transform:translateX(-50%);font-size:9px;color:#64748b;white-space:nowrap;background:#fff;padding:0 3px}
+    .axis-label-start{transform:none}
+    .axis-label-end{transform:translateX(-100%)}
     .today-axis-line{position:absolute;top:0;bottom:0;border-left:1px solid #ef4444;opacity:.75}
     .today-axis-label{position:absolute;top:10px;transform:translateX(-50%);font-size:9px;font-weight:800;color:#b91c1c;background:#fee2e2;border:1px solid #fca5a5;border-radius:999px;padding:0 6px}
     .timeline-track{position:relative;height:24px;border-radius:7px;background:#f8fafc;border:1px solid #dbe5ef;overflow:visible}
@@ -394,13 +408,19 @@ const buildPMGantDeckHTML = (
             <div>Signals</div>
             <div>Timeline</div>
           </div>
-          <div class="timeline-axis">
-            ${axisLabels.map(t => `
-              <span class="axis-line" style="left:${t.percent}%"></span>
-              <span class="axis-label" style="left:${t.percent}%">${escapeHTML(t.label)}</span>
-            `).join('')}
-            <span class="today-axis-line" style="left:${todayPct}%"></span>
-            <span class="today-axis-label" style="left:${todayPct}%">Today</span>
+          <div class="timeline-axis-row">
+            <div class="timeline-axis-spacer"></div>
+            <div class="timeline-axis">
+              ${axisLabels.map(t => {
+                const anchorClass = t.percent === 0 ? ' axis-label-start' : (t.percent === 100 ? ' axis-label-end' : '');
+                return `
+                  <span class="axis-line" style="left:${t.percent}%"></span>
+                  <span class="axis-label${anchorClass}" style="left:${t.percent}%">${escapeHTML(t.label)}</span>
+                `;
+              }).join('')}
+              <span class="today-axis-line" style="left:${todayPct}%"></span>
+              <span class="today-axis-label" style="left:${todayPct}%">Today</span>
+            </div>
           </div>
           ${rowsHTML}
         ` : `<div class="empty-state">No roadmap items defined yet for this project.</div>`}

@@ -258,16 +258,38 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
           }
       });
 
+      const mergedPMReports = [...(current.pmReportData || [])];
+      (incoming.pmReportData || []).forEach(incReport => {
+          const idx = mergedPMReports.findIndex(r => r.id === incReport.id);
+          if (idx === -1) {
+              mergedPMReports.push(incReport);
+          } else {
+              mergedPMReports[idx] = incReport;
+          }
+      });
+
+      const mergedPMGantItems = [...(current.pmGantData || [])];
+      (incoming.pmGantData || []).forEach(incItem => {
+          const idx = mergedPMGantItems.findIndex(item => item.id === incItem.id);
+          if (idx === -1) {
+              mergedPMGantItems.push(incItem);
+          } else {
+              mergedPMGantItems[idx] = incItem;
+          }
+      });
+
       const finalState: AppState = {
           ...current,
           users: mergedUsers,
           teams: mergedTeams,
           weeklyReports: mergedReports,
           meetings: mergedMeetings,
+          pmReportData: mergedPMReports,
+          pmGantData: mergedPMGantItems,
           lastUpdated: Date.now()
       };
 
-      if (window.confirm(`MERGE DATA\n\nSuccessfully prepared merge:\n- Users: ${mergedUsers.length}\n- Teams: ${mergedTeams.length}\n- Reports: ${mergedReports.length}\n\nApply changes?`)) {
+      if (window.confirm(`MERGE DATA\n\nSuccessfully prepared merge:\n- Users: ${mergedUsers.length}\n- Teams: ${mergedTeams.length}\n- Reports: ${mergedReports.length}\n- PM Reports: ${mergedPMReports.length}\n- PM Gant items: ${mergedPMGantItems.length}\n\nApply changes?`)) {
           onImport(finalState);
       }
   };

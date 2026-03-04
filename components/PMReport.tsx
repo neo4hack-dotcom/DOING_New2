@@ -1109,6 +1109,7 @@ const PMReport: React.FC<PMReportProps> = ({
   const [versionPanelProject, setVersionPanelProject] = useState<string | null>(null);
   const [showAIPMModal, setShowAIPMModal] = useState(false);
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
+  const [previewContext, setPreviewContext] = useState<string | null>(null);
 
   const allProjects = useMemo(() => {
     const projects: (Project & { teamName: string })[] = [];
@@ -1192,6 +1193,7 @@ const PMReport: React.FC<PMReportProps> = ({
     setView('overview');
     setShowAIPMModal(false);
     setPrefillNotice(null);
+    setPreviewContext(null);
     setEditingReport(null);
   };
 
@@ -1233,13 +1235,32 @@ const PMReport: React.FC<PMReportProps> = ({
       // Deterministic export format to avoid style drift between generations.
       const html = buildConsultingDeckHTML(reportsForGeneration, teamNameById);
       setGeneratedHTML(html);
+      setPreviewContext(null);
       setView('report-preview');
     } catch (err) {
       console.error('Report generation failed:', err);
       setGeneratedHTML('<p style="color:#ef4444;font-family:sans-serif;padding:20px;">Report generation failed. Please check your LLM configuration.</p>');
+      setPreviewContext(null);
       setView('report-preview');
     }
     setIsGenerating(false);
+  };
+
+  const handleGenerateReportFromVersion = (report: PMReportData) => {
+    const project = allProjects.find(p => p.id === report.projectId);
+    if (!project) {
+      setGeneratedHTML('<p style="color:#ef4444;font-family:sans-serif;padding:20px;">Historical report generation failed: project is no longer visible.</p>');
+      setPreviewContext(null);
+      setVersionPanelProject(null);
+      setView('report-preview');
+      return;
+    }
+
+    const html = buildConsultingDeckHTML([{ project, report }], teamNameById);
+    setGeneratedHTML(html);
+    setPreviewContext(`Historical view • ${project.name} • ${report.versionLabel || `v${report.version || 1}`}`);
+    setVersionPanelProject(null);
+    setView('report-preview');
   };
 
   // ─── PDF Export ───
@@ -1662,6 +1683,11 @@ ${generatedHTML}</body></html>`;
         <div>
           <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2"><Eye className="w-5 h-5 text-indigo-500" /> Report Preview</h2>
           <p className="text-sm text-gray-500 mt-1">Review before exporting to PDF</p>
+          {previewContext && (
+            <p className="mt-2 inline-flex items-center rounded-full border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-1 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+              {previewContext}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <button onClick={() => setView('overview')} className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 dark:bg-gray-800 dark:text-gray-400 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Back</button>
@@ -1711,6 +1737,13 @@ ${generatedHTML}</body></html>`;
                   <span>{v.overallCompletionPct}% complete</span>
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    onClick={() => handleGenerateReportFromVersion(v)}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-white dark:bg-gray-800 border border-emerald-200 dark:border-emerald-700 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors"
+                    title="Generate historical report from this version"
+                  >
+                    <Eye className="w-3 h-3" /> Generate
+                  </button>
                   <button onClick={() => handleEditVersion(v)} className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-700 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"><Edit3 className="w-3 h-3" /> Edit</button>
                   {versions.length > 1 && <button onClick={() => { if (confirm('Delete this version?')) onDeletePMReport(v.id); }} className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-500 bg-white dark:bg-gray-800 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"><Trash2 className="w-3 h-3" /> Delete</button>}
                 </div>
