@@ -51,6 +51,10 @@ def init_db_if_needed():
             "meetings": [],  # Réunions enregistrées
             "weeklyReports": [],  # Rapports hebdomadaires
             "workingGroups": [],  # Groupes de travail
+            "smartTodos": [],  # Smart To Do
+            "oneOffQueries": [],  # One Off Queries
+            "pmGantData": [],  # PM Gant
+            "pmReportData": [],  # PM Status Report
             "notifications": [],  # Notifications système
             "dismissedAlerts": {},  # Alertes rejetées
             "systemMessage": { "active": False, "content": "", "level": "info" },  # Message système global
@@ -153,7 +157,9 @@ def update_db_config_path():
             # Crée une DB vierge avec l'admin par défaut
             initial_data = {
                 "users": [{ "id": "u1", "uid": "Admin", "firstName": "System", "lastName": "Admin", "functionTitle": "Administrator", "role": "Admin", "password": "admin" }],
-                "teams": [], "meetings": [], "weeklyReports": [], "workingGroups": [], "notifications": [],
+                "teams": [], "meetings": [], "weeklyReports": [], "workingGroups": [],
+                "smartTodos": [], "oneOffQueries": [], "pmGantData": [], "pmReportData": [],
+                "notifications": [],
                 "dismissedAlerts": {}, "systemMessage": { "active": False, "content": "", "level": "info" },
                 "notes": [], "lastUpdated": int(time.time() * 1000)
             }
