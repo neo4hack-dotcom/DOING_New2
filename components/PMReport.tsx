@@ -11,7 +11,6 @@ import {
   RAGStatus
 } from '../types';
 import { generateId } from '../services/storage';
-import { generatePMReportHTML } from '../services/llmService';
 
 // ─── Props ───
 interface PMReportProps {
@@ -67,6 +66,27 @@ const cloneReport = (src: PMReportData, newVersion: number): PMReportData => ({
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 });
+
+const formatMD = (value: number) => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} MD`;
+
+const getIncidentRAGStatus = (report: PMReportData): RAGStatus => {
+  if (report.incidents.length === 0) return 'Green';
+
+  const hasCriticalOpen = report.incidents.some(
+    inc => inc.severity === 'Critical' && inc.status !== 'Resolved'
+  );
+  if (hasCriticalOpen) return 'Red';
+
+  const hasMajorOpen = report.incidents.some(
+    inc => inc.severity === 'Major' && inc.status !== 'Resolved'
+  );
+  if (hasMajorOpen) return 'Red';
+
+  const hasOpenIncident = report.incidents.some(inc => inc.status !== 'Resolved');
+  if (hasOpenIncident) return 'Amber';
+
+  return 'Green';
+};
 
 // ════════════════════════════════════════
 //  FALLBACK HTML GENERATOR (consulting-deck style)
@@ -124,6 +144,15 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
 
   const projectBlocks = data.map(({ project, report }) => {
     const budgetPct = (report.budgetAllocated || 0) > 0 ? Math.round(((report.budgetSpent || 0) / (report.budgetAllocated || 1)) * 100) : 0;
+    const incidentStatus = getIncidentRAGStatus(report);
+    const ragIndicators: Array<{ label: string; status: RAGStatus }> = [
+      { label: 'Overall', status: report.overallStatus },
+      { label: 'Scope', status: report.scopeStatus },
+      { label: 'Schedule', status: report.scheduleStatus },
+      { label: 'Budget', status: report.budgetStatus },
+      { label: 'Resource', status: report.resourceStatus },
+      { label: 'Incident', status: incidentStatus },
+    ];
 
     return `
     <div style="page-break-inside:avoid;">
@@ -140,15 +169,16 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
       <div class="prj-body">
         <!-- RAG STATUS -->
         <div class="rag-row">
-          ${['Overall', 'Scope', 'Schedule', 'Budget', 'Resource'].map(label => {
-            const key = label === 'Overall' ? 'overallStatus' : label === 'Resource' ? 'resourceStatus' : `${label.toLowerCase()}Status`;
-            const st = (report as any)[key] as RAGStatus;
-            return `<div class="rag-card" style="background:${rcBg(st)}">
-              <div class="rag-circle" style="background:${rc(st)}"></div>
+          ${ragIndicators.map(({ label, status }) => {
+            return `<div class="rag-card" style="background:${rcBg(status)}">
+              <div class="rag-circle" style="background:${rc(status)}"></div>
               <div class="rag-label">${label}</div>
             </div>`;
           }).join('')}
         </div>
+
+        <!-- EXECUTIVE SUMMARY -->
+        <div class="card-summary card-blue"><strong style="color:#1e40af">Executive Summary</strong><br/>${report.executiveSummary || 'No executive summary provided.'}</div>
 
         <!-- PROGRESS BAR -->
         <div class="progress-wrap">
@@ -156,16 +186,13 @@ const buildConsultingDeckHTML = (data: { project: Project & { teamName: string }
           <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${report.overallCompletionPct}%"></div></div>
         </div>
 
-        <!-- EXECUTIVE SUMMARY -->
-        ${report.executiveSummary ? `<div class="card-summary card-blue"><strong style="color:#1e40af">Executive Summary</strong><br/>${report.executiveSummary}</div>` : ''}
-
         <!-- BUDGET METRICS -->
         ${(report.budgetAllocated || 0) > 0 ? `
-        <div class="section-title"><div class="dot"></div>Budget Overview</div>
+        <div class="section-title"><div class="dot"></div>Cost Overview (MD)</div>
         <div class="metric-row">
-          <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">$${(report.budgetAllocated || 0).toLocaleString()}</div></div>
-          <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">$${(report.budgetSpent || 0).toLocaleString()}</div></div>
-          <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${(report.budgetForecast || 0) > (report.budgetAllocated || 0) ? '#ef4444' : '#10b981'}">$${(report.budgetForecast || 0).toLocaleString()}</div></div>
+          <div class="metric-box"><div class="metric-label">Allocated</div><div class="metric-value" style="color:#1e293b">${formatMD(report.budgetAllocated || 0)}</div></div>
+          <div class="metric-box"><div class="metric-label">Spent</div><div class="metric-value" style="color:#f59e0b">${formatMD(report.budgetSpent || 0)}</div></div>
+          <div class="metric-box"><div class="metric-label">Forecast</div><div class="metric-value" style="color:${(report.budgetForecast || 0) > (report.budgetAllocated || 0) ? '#ef4444' : '#10b981'}">${formatMD(report.budgetForecast || 0)}</div></div>
           <div class="metric-box"><div class="metric-label">Utilization</div>
             <div class="metric-value" style="color:${budgetPct > 90 ? '#ef4444' : budgetPct > 70 ? '#f59e0b' : '#10b981'}">${budgetPct}%</div>
           </div>
@@ -338,6 +365,11 @@ const PMReport: React.FC<PMReportProps> = ({
         const project = allProjects.find(p => p.id === pid);
         return { project, report };
       }).filter(x => x.report && x.project) as { project: Project & { teamName: string }; report: PMReportData }[];
+      reportsForGeneration.sort((a, b) => {
+        const teamCmp = a.project.teamName.localeCompare(b.project.teamName);
+        if (teamCmp !== 0) return teamCmp;
+        return a.project.name.localeCompare(b.project.name);
+      });
 
       if (reportsForGeneration.length === 0) {
         setGeneratedHTML('<p style="color:#ef4444;font-family:sans-serif;padding:20px;">No report data found for selected projects. Please fill in data first.</p>');
@@ -346,40 +378,8 @@ const PMReport: React.FC<PMReportProps> = ({
         return;
       }
 
-      const dataPayload = reportsForGeneration.map(({ project, report }) => ({
-        projectName: project.name, teamName: project.teamName,
-        status: project.status, deadline: project.deadline, ...report
-      }));
-
-      const prompt = `You are an expert executive report designer. Generate ONLY raw HTML (no markdown, no code fences) for a professional project status one-pager.
-
-CRITICAL OUTPUT RULES:
-- Output ONLY HTML. Start with <style> or <div>. Do NOT wrap in \`\`\` or markdown.
-- Use <style> tags with classes for styling (NOT inline styles everywhere).
-- Use a clean color palette: #1e293b, #4f46e5, #10b981, #f59e0b, #ef4444.
-- RAG circles: colored divs (Green=#10b981, Amber=#f59e0b, Red=#ef4444).
-- Progress bars as nested divs with percentage width.
-- Tables with clean headers for milestones/risks.
-- Cards with colored left borders for summaries.
-- Professional typography, proper spacing, consulting-deck quality.
-- NO JavaScript. NO <html>/<head>/<body> tags.
-
-SECTIONS: Executive Summary with RAG indicators (Overall/Scope/Schedule/Budget/Resource), Completion bar, Budget metrics, Milestones table, Incidents table, Risk Register, Updates, News, Key Decisions, Next Steps.
-
-DATA:
-${JSON.stringify(dataPayload, null, 2)}`;
-
-      let html = '';
-      try {
-        html = await generatePMReportHTML(prompt, llmConfig);
-        // Strip markdown code fences if present
-        const fenceMatch = html.match(/```(?:html)?\s*([\s\S]*?)```/);
-        if (fenceMatch) html = fenceMatch[1].trim();
-        // Basic sanity: if result has no HTML tags at all, use fallback
-        if (!/<[a-z][\s\S]*>/i.test(html)) throw new Error('No HTML in response');
-      } catch {
-        html = buildConsultingDeckHTML(reportsForGeneration);
-      }
+      // Deterministic export format to avoid style drift between generations.
+      const html = buildConsultingDeckHTML(reportsForGeneration);
       setGeneratedHTML(html);
       setView('report-preview');
     } catch (err) {
@@ -463,6 +463,11 @@ ${JSON.stringify(dataPayload, null, 2)}`;
               <RAGSelector label="Schedule" value={editingReport.scheduleStatus} onChange={v => setEditingReport({ ...editingReport, scheduleStatus: v })} />
               <RAGSelector label="Budget" value={editingReport.budgetStatus} onChange={v => setEditingReport({ ...editingReport, budgetStatus: v })} />
               <RAGSelector label="Resource" value={editingReport.resourceStatus} onChange={v => setEditingReport({ ...editingReport, resourceStatus: v })} />
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-500 dark:text-gray-400 min-w-[70px]">Incident</span>
+                <RAGDot status={getIncidentRAGStatus(editingReport)} size="md" />
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{getIncidentRAGStatus(editingReport)}</span>
+              </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium text-gray-500 dark:text-gray-400 min-w-[70px]">Complete</span>
                 <input type="range" min={0} max={100} value={editingReport.overallCompletionPct} onChange={e => setEditingReport({ ...editingReport, overallCompletionPct: parseInt(e.target.value) })} className="flex-1 accent-indigo-600" />
@@ -593,18 +598,18 @@ ${JSON.stringify(dataPayload, null, 2)}`;
         )}
 
         {/* BUDGET */}
-        <SectionHeader id="budget" icon={<DollarSign className="w-4 h-4 text-green-500" />} title="Budget" />
+        <SectionHeader id="budget" icon={<DollarSign className="w-4 h-4 text-green-500" />} title="Cost (MD)" />
         {expandedSections.budget && (
           <div className="mb-6 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-5 shadow-sm">
             <div className="grid grid-cols-3 gap-4">
-              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Allocated</label><input type="number" className={ic} value={editingReport.budgetAllocated || ''} onChange={e => setEditingReport({ ...editingReport, budgetAllocated: parseFloat(e.target.value) || 0 })} /></div>
-              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Spent</label><input type="number" className={ic} value={editingReport.budgetSpent || ''} onChange={e => setEditingReport({ ...editingReport, budgetSpent: parseFloat(e.target.value) || 0 })} /></div>
-              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Forecast</label><input type="number" className={ic} value={editingReport.budgetForecast || ''} onChange={e => setEditingReport({ ...editingReport, budgetForecast: parseFloat(e.target.value) || 0 })} /></div>
+              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Allocated (MD)</label><input type="number" className={ic} value={editingReport.budgetAllocated || ''} onChange={e => setEditingReport({ ...editingReport, budgetAllocated: parseFloat(e.target.value) || 0 })} /></div>
+              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Spent (MD)</label><input type="number" className={ic} value={editingReport.budgetSpent || ''} onChange={e => setEditingReport({ ...editingReport, budgetSpent: parseFloat(e.target.value) || 0 })} /></div>
+              <div><label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Forecast (MD)</label><input type="number" className={ic} value={editingReport.budgetForecast || ''} onChange={e => setEditingReport({ ...editingReport, budgetForecast: parseFloat(e.target.value) || 0 })} /></div>
             </div>
             {(editingReport.budgetAllocated || 0) > 0 && (
               <div className="mt-4">
                 <div className="flex justify-between text-xs font-medium text-gray-500 mb-1">
-                  <span>Budget Utilization</span>
+                  <span>Cost Utilization</span>
                   <span className="font-bold text-indigo-600">{Math.round(((editingReport.budgetSpent || 0) / (editingReport.budgetAllocated || 1)) * 100)}%</span>
                 </div>
                 <div className="h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
