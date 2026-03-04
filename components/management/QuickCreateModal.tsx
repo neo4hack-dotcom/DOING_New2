@@ -42,7 +42,8 @@ const QuickCreateModal: React.FC<QuickCreateModalProps> = ({ isOpen, mode, onClo
             dependencies: [],
             externalDependencies: [],
             additionalDescriptions: [],
-            cost: 0
+            cost: 0,
+            tsdCreated: false
         };
 
         onUpdateTeam({ ...team, projects: [...team.projects, newProject] });

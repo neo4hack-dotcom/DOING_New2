@@ -127,6 +127,7 @@ const PRJBotSidebar: React.FC<PRJBotSidebarProps> = ({ isOpen, onClose, llmConfi
       members: currentUser ? [{ userId: currentUser.id, role: ProjectRole.OWNER }] : [],
       tasks: newTasks,
       isImportant: false,
+      tsdCreated: false,
       createdByBot: true,
       auditLog: [{
         id: generateId(),

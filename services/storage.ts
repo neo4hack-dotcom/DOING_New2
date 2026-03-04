@@ -77,6 +77,7 @@ export const sanitizeAppState = (data: any): AppState => {
         sharedWith: Array.isArray(team.sharedWith) ? team.sharedWith : [],
         projects: Array.isArray(team.projects) ? team.projects.map((p: any) => ({
             ...p,
+            tsdCreated: p.tsdCreated ?? false,
             members: Array.isArray(p.members) ? p.members : [],
             tasks: Array.isArray(p.tasks) ? p.tasks : [],
             sharedWith: Array.isArray(p.sharedWith) ? p.sharedWith : [],
