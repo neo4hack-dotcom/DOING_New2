@@ -31,7 +31,7 @@ interface PMProjectCardProps {
 }
 
 type PMProjectCardView = 'workspace' | 'preview';
-type PMProject = Project & { teamName: string };
+export type PMProject = Project & { teamName: string };
 type CardHealth = 'Green' | 'Amber' | 'Red' | '';
 type MilestoneStatus = 'On Track' | 'Delayed' | 'Completed' | '';
 
@@ -785,6 +785,36 @@ const buildProjectCardHTML = (
 
     <div class="footer">DOINg • Steering Committee Project Card</div>
   </div>`;
+};
+
+export const buildPMProjectCardHTMLFromSelection = (
+  projects: PMProject[],
+  users: User[],
+  reports: PMReportData[],
+  roadmapItems: PMGanttItem[],
+  oneOffQueries: OneOffQuery[],
+  currentUser: User,
+  options?: {
+    commonLink?: string;
+    includeOneOffQueries?: boolean;
+  }
+): string => {
+  const includeOneOff = options?.includeOneOffQueries !== false;
+  const scopedQueries = includeOneOff ? oneOffQueries : [];
+  const draft = buildDeterministicDraft(
+    projects,
+    users,
+    reports,
+    roadmapItems,
+    scopedQueries,
+    currentUser,
+    options?.commonLink || ''
+  );
+  return buildProjectCardHTML(
+    draft,
+    projects,
+    scopedQueries.length
+  );
 };
 
 const PMProjectCard: React.FC<PMProjectCardProps> = ({

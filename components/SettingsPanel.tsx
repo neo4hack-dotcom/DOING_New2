@@ -1,25 +1,31 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { AppState, LLMConfig, LLMProvider, User, UserRole, SystemMessage } from '../types';
+import { AppState, LLMConfig, LLMProvider, User, UserRole, SystemMessage, SMTPConfig } from '../types';
 import { fetchOllamaModels, DEFAULT_PROMPTS, testConnection } from '../services/llmService';
 import { clearState } from '../services/storage';
-import { Save, RefreshCw, Bot, Server, Key, Link, Download, Upload, Database, Settings, Lock, Trash2, AlertOctagon, MessageSquare, RotateCcw, FileJson, Workflow, CheckCircle2, XCircle, Merge, HardDrive, WifiOff, Search, Megaphone } from 'lucide-react';
+import { Save, RefreshCw, Bot, Server, Key, Link, Download, Upload, Database, Settings, Lock, Trash2, AlertOctagon, MessageSquare, RotateCcw, FileJson, Workflow, CheckCircle2, XCircle, Merge, HardDrive, WifiOff, Search, Megaphone, Mail } from 'lucide-react';
 
 interface SettingsPanelProps {
   config: LLMConfig;
+  smtpConfig: SMTPConfig;
   appState: AppState | null; // Needed for export and user management
   onSave: (config: LLMConfig, prompts?: Record<string, string>) => void;
+  onSaveSMTPConfig?: (config: SMTPConfig) => void;
   onImport: (newState: AppState) => void;
   onUpdateUserPassword?: (userId: string, newPass: string) => void; 
   onUpdateSystemMessage?: (msg: SystemMessage) => void;
 }
 
-const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave, onImport, onUpdateUserPassword, onUpdateSystemMessage }) => {
+const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, smtpConfig, appState, onSave, onSaveSMTPConfig, onImport, onUpdateUserPassword, onUpdateSystemMessage }) => {
   const [localConfig, setLocalConfig] = useState<LLMConfig>(config);
+  const [localSmtpConfig, setLocalSmtpConfig] = useState<SMTPConfig>(smtpConfig);
   const [localPrompts, setLocalPrompts] = useState<Record<string, string>>(appState?.prompts || {});
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved'>('idle');
+  const [smtpSaveStatus, setSmtpSaveStatus] = useState<'idle' | 'saved'>('idle');
+  const [smtpTestStatus, setSmtpTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [smtpTestError, setSmtpTestError] = useState('');
   const [activeTab, setActiveTab] = useState<'general' | 'prompts'>('general');
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   
@@ -56,6 +62,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
     }
   }, [appState?.currentUser]);
 
+  useEffect(() => {
+    setLocalSmtpConfig(smtpConfig);
+  }, [smtpConfig]);
+
   const handleRefreshOllama = async () => {
     setLoadingModels(true);
     const models = await fetchOllamaModels(localConfig.baseUrl || 'http://localhost:11434');
@@ -83,6 +93,35 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
     onSave(localConfig, localPrompts);
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
+  };
+
+  const handleSaveSMTP = () => {
+      if (onSaveSMTPConfig) {
+          onSaveSMTPConfig(localSmtpConfig);
+          setSmtpSaveStatus('saved');
+          setTimeout(() => setSmtpSaveStatus('idle'), 2000);
+      }
+  };
+
+  const handleTestSMTP = async () => {
+      setSmtpTestStatus('testing');
+      setSmtpTestError('');
+      try {
+          const response = await fetch('/api/mail/test', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ smtpConfig: localSmtpConfig })
+          });
+          if (!response.ok) {
+              const body = await response.json().catch(() => ({}));
+              throw new Error(body?.error || `SMTP test failed (${response.status})`);
+          }
+          setSmtpTestStatus('success');
+      } catch (e: any) {
+          setSmtpTestStatus('error');
+          setSmtpTestError(e?.message || 'SMTP connection failed');
+      }
+      setTimeout(() => setSmtpTestStatus('idle'), 3500);
   };
 
   const handlePasswordReset = () => {
@@ -278,6 +317,38 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
           }
       });
 
+      const mergedPMEmailJobs = [...(current.pmEmailJobs || [])];
+      (incoming.pmEmailJobs || []).forEach(incJob => {
+          const idx = mergedPMEmailJobs.findIndex(job => job.id === incJob.id);
+          if (idx === -1) {
+              mergedPMEmailJobs.push(incJob);
+          } else {
+              mergedPMEmailJobs[idx] = incJob;
+          }
+      });
+
+      const incomingSMTP = incoming.smtpConfig || {
+          host: '',
+          port: 587,
+          user: '',
+          password: '',
+          security: 'starttls',
+          clientHostname: ''
+      };
+      const currentSMTP = current.smtpConfig || {
+          host: '',
+          port: 587,
+          user: '',
+          password: '',
+          security: 'starttls',
+          clientHostname: ''
+      };
+      const mergedSMTPConfig = {
+          ...currentSMTP,
+          ...incomingSMTP,
+          password: incomingSMTP.password || currentSMTP.password || ''
+      };
+
       const finalState: AppState = {
           ...current,
           users: mergedUsers,
@@ -286,10 +357,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
           meetings: mergedMeetings,
           pmReportData: mergedPMReports,
           pmGantData: mergedPMGantItems,
+          pmEmailJobs: mergedPMEmailJobs,
+          smtpConfig: mergedSMTPConfig,
           lastUpdated: Date.now()
       };
 
-      if (window.confirm(`MERGE DATA\n\nSuccessfully prepared merge:\n- Users: ${mergedUsers.length}\n- Teams: ${mergedTeams.length}\n- Reports: ${mergedReports.length}\n- PM Reports: ${mergedPMReports.length}\n- PM Gant items: ${mergedPMGantItems.length}\n\nApply changes?`)) {
+      if (window.confirm(`MERGE DATA\n\nSuccessfully prepared merge:\n- Users: ${mergedUsers.length}\n- Teams: ${mergedTeams.length}\n- Reports: ${mergedReports.length}\n- PM Reports: ${mergedPMReports.length}\n- PM Gant items: ${mergedPMGantItems.length}\n- PM Email jobs: ${mergedPMEmailJobs.length}\n\nApply changes?`)) {
           onImport(finalState);
       }
   };
@@ -445,6 +518,113 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, appState, onSave,
                                     <br/>
                                     <span className="text-amber-500">Warning: Ensure the server process has Write permissions to the new directory.</span>
                                 </p>
+                            </div>
+                        </div>
+                </div>
+                    <hr className="border-slate-100 dark:border-slate-700 my-8" />
+                </div>
+            )}
+
+            {/* SMTP CONFIGURATION (ADMIN ONLY) */}
+            {appState?.currentUser?.role === UserRole.ADMIN && (
+                <div>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+                        <Mail className="w-5 h-5 text-indigo-500" />
+                        SMTP Configuration (Admin)
+                    </h3>
+                    <div className="bg-slate-50 dark:bg-slate-900/50 p-6 rounded-xl border border-slate-100 dark:border-slate-700/50 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">SMTP Host</label>
+                                <input
+                                    type="text"
+                                    value={localSmtpConfig.host}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, host: e.target.value }))}
+                                    placeholder="smtp.example.com"
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">SMTP Port</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    value={localSmtpConfig.port}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, port: Number(e.target.value || 0) }))}
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">SMTP User</label>
+                                <input
+                                    type="text"
+                                    value={localSmtpConfig.user}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, user: e.target.value }))}
+                                    placeholder="user@domain.com"
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">SMTP Password</label>
+                                <input
+                                    type="password"
+                                    value={localSmtpConfig.password}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, password: e.target.value }))}
+                                    placeholder="••••••••"
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">SSL / TLS Option</label>
+                                <select
+                                    value={localSmtpConfig.security}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, security: e.target.value as SMTPConfig['security'] }))}
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                >
+                                    <option value="starttls">STARTTLS (Recommended)</option>
+                                    <option value="ssl">SSL/TLS</option>
+                                    <option value="none">None (Plain SMTP)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Client Hostname</label>
+                                <input
+                                    type="text"
+                                    value={localSmtpConfig.clientHostname}
+                                    onChange={e => setLocalSmtpConfig(prev => ({ ...prev, clientHostname: e.target.value }))}
+                                    placeholder="Optional HELO/EHLO hostname"
+                                    className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white"
+                                />
+                            </div>
+                        </div>
+
+                        {smtpTestStatus === 'error' && smtpTestError && (
+                            <div className="text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg px-3 py-2">
+                                SMTP test failed: {smtpTestError}
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                                {smtpTestStatus === 'success' && <span className="text-green-600 dark:text-green-400 flex items-center text-xs font-bold"><CheckCircle2 className="w-4 h-4 mr-1" /> SMTP OK</span>}
+                                {smtpSaveStatus === 'saved' && <span className="text-indigo-600 dark:text-indigo-300 text-xs font-bold">Saved in DB</span>}
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={handleTestSMTP}
+                                    disabled={smtpTestStatus === 'testing' || !localSmtpConfig.host || !localSmtpConfig.user || !localSmtpConfig.password || !localSmtpConfig.port}
+                                    className="px-4 py-2 text-sm bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {smtpTestStatus === 'testing' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                    Test SMTP
+                                </button>
+                                <button
+                                    onClick={handleSaveSMTP}
+                                    className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+                                >
+                                    <Save className="w-4 h-4" />
+                                    Save SMTP
+                                </button>
                             </div>
                         </div>
                     </div>

@@ -21,9 +21,10 @@ import OneOffQueryManager from './components/OneOffQueryManager';
 import PMReport from './components/PMReport';
 import PMGant from './components/PMGant';
 import PMProjectCard from './components/PMProjectCard';
+import PMMailCenter from './components/PMMailCenter';
 
 import { loadState, saveState, subscribeToStoreUpdates, updateAppState, fetchFromServer, generateId, sanitizeAppState } from './services/storage';
-import { AppState, User, Team, UserRole, Meeting, LLMConfig, WeeklyReport as WeeklyReportType, WorkingGroup, SystemMessage, AppNotification, SmartTodo, OneOffQuery, PMReportData, PMGanttItem } from './types';
+import { AppState, User, Team, UserRole, Meeting, LLMConfig, WeeklyReport as WeeklyReportType, WorkingGroup, SystemMessage, AppNotification, SmartTodo, OneOffQuery, PMReportData, PMGanttItem, SMTPConfig, PMEmailJob } from './types';
 import { Bell, Sun, Moon, Bot, RefreshCw, Cloud, CloudOff } from 'lucide-react';
 
 interface ErrorBoundaryProps {
@@ -163,6 +164,15 @@ const getFilteredState = (state: AppState): AppState => {
         workingGroups: filteredGroups,
         smartTodos: myTodos,
         pmGantData: filteredPMGantData,
+        smtpConfig: {
+            host: '',
+            port: 587,
+            user: '',
+            password: '',
+            security: 'starttls',
+            clientHostname: ''
+        },
+        pmEmailJobs: [],
         notifications: state.notifications || [],
         dismissedAlerts: state.dismissedAlerts || {}
     };
@@ -838,6 +848,11 @@ const AppContent: React.FC = () => {
       setAppState(newState);
   };
 
+  const handleUpdateSMTPConfig = (smtpConfig: SMTPConfig) => {
+      const newState = updateAppState(curr => ({ ...curr, smtpConfig }));
+      setAppState(newState);
+  };
+
   const handleUpdateUserPassword = (userId: string, newPass: string) => {
       const newState = updateAppState(curr => ({
           ...curr,
@@ -857,6 +872,19 @@ const AppContent: React.FC = () => {
       window.location.reload();
   }
 
+  const handleSavePMEmailJob = createHandler((curr, job: PMEmailJob) => {
+    const jobs = curr.pmEmailJobs || [];
+    const idx = jobs.findIndex(existing => existing.id === job.id);
+    const next = [...jobs];
+    if (idx >= 0) next[idx] = job; else next.push(job);
+    return { ...curr, pmEmailJobs: next };
+  });
+
+  const handleDeletePMEmailJob = createHandler((curr, id: string) => ({
+    ...curr,
+    pmEmailJobs: (curr.pmEmailJobs || []).filter(job => job.id !== id)
+  }));
+
   // --- RENDER ---
 
   if (!appState || !viewState) return <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-gray-900"><div className="text-center"><RefreshCw className="w-8 h-8 animate-spin text-indigo-500 mx-auto mb-3" /><p className="text-gray-500 dark:text-gray-400 font-medium">Loading Smart System...</p></div></div>;
@@ -875,6 +903,7 @@ const AppContent: React.FC = () => {
   const getPageTitle = () => {
       if (activeTab === 'pm-project-card') return 'PM - Project card';
       if (activeTab === 'pm-gant') return 'PM Gant';
+      if (activeTab === 'pm-mail-center') return 'PM Mail Center';
       return activeTab.charAt(0).toUpperCase() + activeTab.slice(1).replace('-', ' ');
   }
 
@@ -1040,8 +1069,22 @@ const AppContent: React.FC = () => {
               />
             )}
             {activeTab === 'pm-gant' && appState.currentUser && <PMGant teams={viewState.teams} users={viewState.users} currentUser={appState.currentUser} llmConfig={appState.llmConfig} gantItems={viewState.pmGantData || []} onSaveItem={handleSavePMGantItem} onDeleteItem={handleDeletePMGantItem} />}
+            {activeTab === 'pm-mail-center' && appState.currentUser?.role === UserRole.ADMIN && (
+              <PMMailCenter
+                teams={viewState.teams}
+                users={viewState.users}
+                currentUser={appState.currentUser}
+                smtpConfig={appState.smtpConfig}
+                pmReportData={appState.pmReportData || []}
+                pmGantData={appState.pmGantData || []}
+                oneOffQueries={appState.oneOffQueries || []}
+                pmEmailJobs={appState.pmEmailJobs || []}
+                onSavePMEmailJob={handleSavePMEmailJob}
+                onDeletePMEmailJob={handleDeletePMEmailJob}
+              />
+            )}
             {activeTab === 'admin-users' && <AdminPanel users={appState.users} teams={appState.teams} onAddUser={handleAddUser} onUpdateUser={handleUpdateUser} onDeleteUser={handleDeleteUser} onAddTeam={handleAddTeam} onUpdateTeam={handleUpdateTeam} onDeleteTeam={handleDeleteTeam} />}
-            {activeTab === 'settings' && <SettingsPanel config={appState.llmConfig} appState={appState} onSave={handleUpdateLLMConfig} onImport={handleImportState} onUpdateUserPassword={handleUpdateUserPassword} onUpdateSystemMessage={handleUpdateSystemMessage} />}
+            {activeTab === 'settings' && <SettingsPanel config={appState.llmConfig} smtpConfig={appState.smtpConfig} appState={appState} onSave={handleUpdateLLMConfig} onSaveSMTPConfig={handleUpdateSMTPConfig} onImport={handleImportState} onUpdateUserPassword={handleUpdateUserPassword} onUpdateSystemMessage={handleUpdateSystemMessage} />}
         </div>
       </main>
     </div>

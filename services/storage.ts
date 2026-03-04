@@ -1,5 +1,5 @@
 
-import { User, Team, Meeting, UserRole, TaskStatus, TaskPriority, ProjectStatus, ProjectRole, ActionItemStatus, AppState, LLMConfig, WeeklyReport, AppNotification, WorkingGroup, SmartTodo, OneOffQuery } from '../types';
+import { User, Team, Meeting, UserRole, TaskStatus, TaskPriority, ProjectStatus, ProjectRole, ActionItemStatus, AppState, LLMConfig, WeeklyReport, AppNotification, WorkingGroup, SmartTodo, OneOffQuery, SMTPConfig } from '../types';
 
 // Clé de stockage local pour les données de l'application
 const STORAGE_KEY = 'teamsync_data_v15';
@@ -17,6 +17,15 @@ const DEFAULT_LLM_CONFIG: LLMConfig = {
     provider: 'ollama',
     baseUrl: 'http://localhost:11434',
     model: 'llama3'
+};
+
+const DEFAULT_SMTP_CONFIG: SMTPConfig = {
+    host: '',
+    port: 587,
+    user: '',
+    password: '',
+    security: 'starttls',
+    clientHostname: ''
 };
 
 /**
@@ -38,6 +47,8 @@ export const sanitizeAppState = (data: any): AppState => {
         oneOffQueries: Array.isArray(data.oneOffQueries) ? data.oneOffQueries : [],
         pmGantData: Array.isArray(data.pmGantData) ? data.pmGantData : [],
         pmReportData: Array.isArray(data.pmReportData) ? data.pmReportData : [],
+        smtpConfig: data.smtpConfig && typeof data.smtpConfig === 'object' ? data.smtpConfig : DEFAULT_SMTP_CONFIG,
+        pmEmailJobs: Array.isArray(data.pmEmailJobs) ? data.pmEmailJobs : [],
         notifications: Array.isArray(data.notifications) ? data.notifications : [],
         dismissedAlerts: data.dismissedAlerts && typeof data.dismissedAlerts === 'object' ? data.dismissedAlerts : {},
         systemMessage: data.systemMessage || { active: false, content: '', level: 'info' },
@@ -157,6 +168,54 @@ export const sanitizeAppState = (data: any): AppState => {
         notes: typeof item.notes === 'string' ? item.notes : '',
     }));
 
+    const smtp = state.smtpConfig || DEFAULT_SMTP_CONFIG;
+    state.smtpConfig = {
+        host: typeof smtp.host === 'string' ? smtp.host : '',
+        port: Number.isFinite(Number(smtp.port)) ? Number(smtp.port) : 587,
+        user: typeof smtp.user === 'string' ? smtp.user : '',
+        password: typeof smtp.password === 'string' ? smtp.password : '',
+        security:
+            smtp.security === 'ssl' || smtp.security === 'starttls' || smtp.security === 'none'
+                ? smtp.security
+                : 'starttls',
+        clientHostname: typeof smtp.clientHostname === 'string' ? smtp.clientHostname : ''
+    };
+
+    state.pmEmailJobs = (state.pmEmailJobs || []).map((job: any) => ({
+        id: typeof job.id === 'string' ? job.id : generateId(),
+        reportType:
+            job.reportType === 'pm-status-report' ||
+            job.reportType === 'pm-project-card' ||
+            job.reportType === 'pm-gant'
+                ? job.reportType
+                : 'pm-status-report',
+        reportTitle: typeof job.reportTitle === 'string' ? job.reportTitle : 'PM report',
+        subject: typeof job.subject === 'string' ? job.subject : '',
+        htmlBody: typeof job.htmlBody === 'string' ? job.htmlBody : '',
+        teamId: typeof job.teamId === 'string' ? job.teamId : null,
+        teamName: typeof job.teamName === 'string' ? job.teamName : '',
+        projectIds: Array.isArray(job.projectIds) ? job.projectIds.filter((id: any) => typeof id === 'string') : [],
+        projectNames: Array.isArray(job.projectNames) ? job.projectNames.filter((n: any) => typeof n === 'string') : [],
+        recipients: {
+            to: Array.isArray(job.recipients?.to) ? job.recipients.to.filter((v: any) => typeof v === 'string') : [],
+            cc: Array.isArray(job.recipients?.cc) ? job.recipients.cc.filter((v: any) => typeof v === 'string') : [],
+            bcc: Array.isArray(job.recipients?.bcc) ? job.recipients.bcc.filter((v: any) => typeof v === 'string') : [],
+        },
+        createdByUserId: typeof job.createdByUserId === 'string' ? job.createdByUserId : '',
+        createdAt: typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString(),
+        scheduleAt: typeof job.scheduleAt === 'string' ? job.scheduleAt : new Date().toISOString(),
+        status:
+            job.status === 'pending' ||
+            job.status === 'sent' ||
+            job.status === 'failed' ||
+            job.status === 'cancelled'
+                ? job.status
+                : 'pending',
+        sentAt: typeof job.sentAt === 'string' ? job.sentAt : undefined,
+        lastTriedAt: typeof job.lastTriedAt === 'string' ? job.lastTriedAt : undefined,
+        lastError: typeof job.lastError === 'string' ? job.lastError : undefined,
+    }));
+
     return state;
 };
 
@@ -227,6 +286,8 @@ const getDefaultState = (): AppState => {
         oneOffQueries: [],
         pmGantData: [],
         pmReportData: [],
+        smtpConfig: DEFAULT_SMTP_CONFIG,
+        pmEmailJobs: [],
         notifications: [],
         dismissedAlerts: {},
         systemMessage: { active: false, content: '', level: 'info' },

@@ -37,7 +37,7 @@ interface PMGantProps {
 }
 
 type PMGantView = 'workspace' | 'preview';
-type PMGantProject = Project & { teamName: string };
+export type PMGantProject = Project & { teamName: string };
 
 interface PMGantFormState {
   projectId: string;
@@ -55,7 +55,7 @@ interface PMGantFormState {
   notes: string;
 }
 
-type PMGantNarrative = {
+export type PMGantNarrative = {
   executiveSummary: string;
   projectSummaries: { projectId: string; summary: string; keyMilestones: string[] }[];
 };
@@ -123,7 +123,7 @@ const escapeHTML = (value: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const buildDefaultNarrative = (projects: Array<{ project: PMGantProject; items: PMGanttItem[] }>): PMGantNarrative => {
+export const buildDefaultNarrative = (projects: Array<{ project: PMGantProject; items: PMGanttItem[] }>): PMGantNarrative => {
   const summary = `Roadmap generated for ${projects.length} project${projects.length > 1 ? 's' : ''}. Timeline reflects current planning inputs and milestone readiness.`;
   return {
     executiveSummary: summary,
@@ -135,7 +135,7 @@ const buildDefaultNarrative = (projects: Array<{ project: PMGantProject; items: 
   };
 };
 
-const buildPMGantDeckHTML = (
+export const buildPMGantDeckHTML = (
   projects: Array<{ project: PMGantProject; items: PMGanttItem[] }>,
   narrative: PMGantNarrative
 ): string => {
@@ -441,6 +441,33 @@ const buildPMGantDeckHTML = (
     <section class="exec-summary">${escapeHTML(narrative.executiveSummary || 'Roadmap generated from selected projects and manually curated PM inputs.')}</section>
     ${projectSections}
   </div>`;
+};
+
+export const buildPMGantHTMLFromSelection = (
+  projects: PMGantProject[],
+  gantItems: PMGanttItem[]
+): string => {
+  const bundles = projects
+    .map(project => ({
+      project,
+      items: gantItems
+        .filter(item => item.projectId === project.id)
+        .sort((a, b) => {
+          const aStart = parseDate(a.startDate)?.getTime() || 0;
+          const bStart = parseDate(b.startDate)?.getTime() || 0;
+          if (aStart !== bStart) return aStart - bStart;
+          return a.title.localeCompare(b.title);
+        })
+    }))
+    .filter(bundle => bundle.items.length > 0)
+    .sort((a, b) => {
+      const teamCompare = a.project.teamName.localeCompare(b.project.teamName);
+      if (teamCompare !== 0) return teamCompare;
+      return a.project.name.localeCompare(b.project.name);
+    });
+
+  const narrative = buildDefaultNarrative(bundles);
+  return buildPMGantDeckHTML(bundles, narrative);
 };
 
 const PMGant: React.FC<PMGantProps> = ({
