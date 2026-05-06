@@ -4,7 +4,7 @@ import {
   FileBarChart, Plus, Trash2, Save, ChevronDown, AlertTriangle,
   CheckCircle2, TrendingUp, Shield, Megaphone, Target, Calendar,
   DollarSign, Users, Sparkles, Download, Edit3, Eye,
-  CircleDot, Info, ChevronUp, Activity, Copy, History, Tag, Search,
+  CircleDot, Info, ChevronUp, Activity, Copy, History, Tag,
   Bot, Paperclip, Loader2, X, Send, Mail
 } from 'lucide-react';
 import {
@@ -1150,7 +1150,6 @@ const PMReport: React.FC<PMReportProps> = ({
   const [showAIPMModal, setShowAIPMModal] = useState(false);
   const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [previewContext, setPreviewContext] = useState<string | null>(null);
-  const [projectSearch, setProjectSearch] = useState('');
 
   const allProjects = useMemo(() => {
     const projects: (Project & { teamName: string })[] = [];
@@ -1159,17 +1158,6 @@ const PMReport: React.FC<PMReportProps> = ({
     }));
     return projects;
   }, [teams]);
-
-  const filteredProjects = useMemo(() => {
-    const query = projectSearch.trim().toLowerCase();
-    if (!query) return allProjects;
-    return allProjects.filter(project => {
-      const name = project.name.toLowerCase();
-      const team = (project.teamName || '').toLowerCase();
-      const status = (project.status || '').toLowerCase();
-      return name.includes(query) || team.includes(query) || status.includes(query);
-    });
-  }, [allProjects, projectSearch]);
 
   const teamNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -1836,21 +1824,8 @@ ${generatedHTML}</body></html>`;
         </div>
       </div>
 
-      <div className="mb-4">
-        <div className="relative">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={projectSearch}
-            onChange={e => setProjectSearch(e.target.value)}
-            placeholder="Search project, team, or status..."
-            className="w-full pl-10 pr-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-          />
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredProjects.map(project => {
+        {allProjects.map(project => {
           const latest = getLatestVersion(project.id);
           const versionCount = getProjectVersions(project.id).length;
           const isSelected = selectedProjectIds.includes(project.id);
@@ -1910,12 +1885,6 @@ ${generatedHTML}</body></html>`;
           <FileBarChart className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p className="font-medium">No projects available</p>
           <p className="text-sm mt-1">Projects will appear here once they are created</p>
-        </div>
-      )}
-      {allProjects.length > 0 && filteredProjects.length === 0 && (
-        <div className="text-center py-12 text-gray-400 dark:text-gray-500 border border-dashed border-gray-200 dark:border-gray-700 rounded-xl">
-          <p className="font-medium">No project matches your search.</p>
-          <p className="text-sm mt-1">Try another project name, team, or status.</p>
         </div>
       )}
     </div>
